@@ -152,7 +152,7 @@ class SurfaceReflectance():
         # file should be used for input.
         # Example: S2A_MSI_L1C_T10TFR_20180816_20180903.xml uses the
         # VJ[12]04ANC.A2018228.001.*.h5 HDF5 file or VNP04ANC.A2018228.001.*.h5.
-        s2_prefixes_collection = ['S2A', 'S2B', 'S2C']
+        s2_prefixes_collection = ['S2A', 'S2B', 'S2C', 'S2D']
         if base_xmlfile[0:3] in s2_prefixes_collection:
             # Collection naming convention. Pull the year, month, day from the
             # XML filename. It should be the 4th group, separated by
