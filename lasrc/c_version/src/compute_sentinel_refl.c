@@ -633,19 +633,33 @@ int compute_sentinel_sr_refl
     printf ("Performing atmospheric corrections for each Sentinel reflectance "
         "band ... %s", ctime(&mytime)); fflush(stdout);
 
-    /* Flag fill pixels as any pixel with all bands containing fill values.
-       This used to be flag as fill if any pixel is fill, but often the S2
-       values for non-visible bands are a value of 0. */
+    /*
+     * Flag fill pixels as any pixel with any bands containing fill values.
+     *
+     * In `eros-collection2-3.5.1` version this had been configured to flag pixels as valid if ANY band
+     * contained a valid value ("often the S2 values for non-visible bands are a value of 0.")
+     *
+     * This had caused issues with spurious, incorrect surface reflectance values in images because the "0"
+     * data value had been atmospherically corrected.
+     *
+     * As of Sentinel-2 Baseline 4.00 (~Jan, 2022) the L1C data contain an offset of 1_000, so we can now
+     * reliably consider "0" as the masked "fill value".
+     *
+     * This logic has been updated as part of the NASA-IMPACT fork of `eros-collection2-3.5.1` to mask a pixel
+     * if ANY band has a fill data value. This is important as the sensor detectors do not all begin at the
+     * same positions, so we do not want to atmospherically correct fill pixel values. This should fix issues
+     * at the edge of Sentinel-2 granules.
+    */
     for (i = 0; i < npixels; i++)
     {
-        /* Initialize to true and break out if any band is not fill */
-        is_fill = true;
+        /* Initialize to false and break out if any band is fill */
+        is_fill = false;
         for (ib = 0; ib <= SRS_BAND12; ib++)
         {
-            if (toaband[ib][i] != bmeta[ib].fill_value)
+            if (toaband[ib][i] == bmeta[ib].fill_value)
             {
                 /* No need to look any further */
-                is_fill = false;
+                is_fill = true;
                 break;
             }
         }  /* end for ib */
