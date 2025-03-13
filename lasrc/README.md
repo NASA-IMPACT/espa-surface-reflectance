@@ -1,3 +1,15 @@
+## LaSRC Version 3.5.2 Release Notes
+Release Date: March, 2025
+
+This release of the LaSRC code has been modified by the NASA-IMPACT team as part of
+maintenance for the HLS project.
+
+### Fixed
+
+- Support Sentinel-2C and -2D by updating hard coded platform values
+- Include `PROC_ALL_BANDS` definition
+- Mask a pixel if _any_ band has invalid data [#17](https://github.com/NASA-IMPACT/espa-surface-reflectance/pull/17)
+
 ## LaSRC Version 3.5.1 Release Notes
 Release Date: TBD 2023
 
