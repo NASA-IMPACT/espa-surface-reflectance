@@ -1,8 +1,12 @@
-## LaSRC Version 3.5.2 Release Notes
+## LaSRC Version 3.5.1.0 Release Notes
+
 Release Date: March, 2025
 
 This release of the LaSRC code has been modified by the NASA-IMPACT team as part of
-maintenance for the HLS project.
+maintenance for the HLS project based off of the USGS's version `v3.5.1`.
+We are indicating this change by appending a "maintainer version" to the version tag
+(`[major].[minor].[patch].[maintainer]`). This is done to prevent potential confusion
+with releases from the upstream.
 
 ### Fixed
 
