@@ -14,7 +14,7 @@ typedef char byte;
 #endif
 
 /* Surface reflectance version */
-#define SR_VERSION "3.5.1.0 (Collection 2)"
+#define SR_VERSION "3.5.2.0 (Collection 2)"
 
 /* Define the default aerosol and EPS value */
 #define DEFAULT_AERO 0.05
@@ -32,9 +32,12 @@ typedef char byte;
    3x3: AERO_WINDOW 3 and HALF_AERO_WINDOW 1
    1x1: AERO_WINDOW 1 and HALF_AERO_WINDOW 0
 */
-#define LAERO_WINDOW 3
+/*#define LAERO_WINDOW 3
 #define LHALF_AERO_WINDOW 1
-#define SAERO_WINDOW 6
+#define SAERO_WINDOW 6*/
+#define LAERO_WINDOW 1
+#define LHALF_AERO_WINDOW 0
+#define SAERO_WINDOW 1
 
 /* Define the size of the window used for fixing the invalid aerosols, using
    an average of the representative pixels in this window. Define the minimum
@@ -285,35 +288,37 @@ typedef struct {
 
 /* Atmospheric Aux Data Source used to index the following arrays */
 typedef enum {
+   AUXNULL = -1,
    MODIS = 0,
-   VIIRS
+   VIIRS,
+   GRIB
 } aux_src_t;
 
 /** Defines for MODIS and VIIRS scale and defaults **/
 /* Water vapor scale factor */
 //#define WV_SCALE_FACTOR (int[]) {200, 100}  /** USGS OPS with MODIS bug **/
 //#define WV_SCALE_FACTOR (int[]) {100, 100}  /** Fixed wv scale for MODIS **/
-#define WV_SCALE_FACTOR (int[]) {200, 200}  /** USGS OPS with MODIS bug, and
+#define WV_SCALE_FACTOR (int[]) { 200, 200, 200}  /** USGS OPS with MODIS bug, and
                                                 added bug for VIIRS **/
 
 /* Water Vapor Default (g/cm^2) - used for scene center computations */
-#define WV_DEFAULT (float[]) {0.5, 2.5}
+#define WV_DEFAULT (float[]) { 0.5, 2.5, 0.5}
 
 /* Water Vapor DN Default - use if WV is fill */
-#define WV_DEFAULT_DN (int[]) {0, 250}
+#define WV_DEFAULT_DN (int[]) {0, 250, 100}
 
 /* Water Vapor fill */
-#define WV_FILL (int[]) {0, 0}
+#define WV_FILL (int[]) {0, 0, 0}
 
 /* Ozone scale factor */
-#define OZ_SCALE_FACTOR (int[]) {400, 400}
+#define OZ_SCALE_FACTOR (int[]) {400, 400, 400}
 
 /* Ozone Default (cm atm) - used for scene center computations */
-#define OZ_DEFAULT (float[]) {0.3, 0.3}
+#define OZ_DEFAULT (float[]) {0.3, 0.3, 0.3}
 
 /* Ozone DN Default - use if OZ is fill */
-#define OZ_DEFAULT_DN (int[]) {120, 110}
+#define OZ_DEFAULT_DN (int[]) {120, 110, 125}
 
 /* Ozone fill */
-#define OZ_FILL (int[]) {0, 0}
+#define OZ_FILL (int[]) {0, 0, 0}
 #endif

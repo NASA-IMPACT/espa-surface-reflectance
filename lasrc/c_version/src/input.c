@@ -972,6 +972,13 @@ int get_xml_input
     strcpy (acq_date, gmeta->acquisition_date);
     strcpy (acq_time, gmeta->scene_center_time);
     this->meta.time_fill = false;
+    //printf ("     JPR xxxxxxxx %s\n",  gmeta->scene_center_time);
+    
+    /* new 26-FEB-26 JPR */
+    if (this->meta.sat == SAT_SENTINEL_2) {
+        ad_hoc_XML_reader(gmeta->scene_center_time);
+        //printf ("     JPR xxxxxxxx %s\n",  gmeta->scene_center_time);
+       }
 
     /* Make sure the acquisition time is not too long (i.e. contains too
        many decimal points for the date/time routines).  The time should be
@@ -1512,7 +1519,8 @@ int get_xml_input
     }
     else
     {
-        sprintf (temp, "%sT00:00:00.00000Z", acq_date);
+        /*sprintf (temp, "%sT00:00:00.00000Z", acq_date);   26-FEB-26, JPR */
+        sprintf (temp, gmeta->scene_center_time);  /* read by ad_hoc_XML_reader() */
         if (!date_init (&this->meta.acq_date, temp, DATE_FORMAT_DATEA_TIME))
         {
             sprintf (errmsg, "Converting the acquisition date and time");

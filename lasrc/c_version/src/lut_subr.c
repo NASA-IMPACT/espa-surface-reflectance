@@ -2863,6 +2863,266 @@ int open_h5_oz_wv_datasets
 
 
 /******************************************************************************
+MODULE:  open_gb_oz_wv_datasets
+
+PURPOSE:  Opens the global GRIB files obtaining the ozone and water vapor datasets
+
+RETURN VALUE:
+Type = int
+Value          Description
+-----          -----------
+ERROR          Error occurred opening the input
+SUCCESS        Successful completion
+
+NOTES:  new, 23-FEB-26 (JPR)
+******************************************************************************/
+static int open_gb_oz_wv_datasets
+(
+    char *filename,     /* I: GRIB file to be read */
+    char *file2name,    /* I: 2nd GRIB file to be read */
+    uint16 *wv,         /* O: water vapor values [CMG_NBLAT x CMG_NBLON] */
+    uint8 *oz,          /* O: ozone values [CMG_NBLAT x CMG_NBLON] */
+    Date_t date         /* date/time of acquisition of scene */
+
+)
+{
+#define GRIB_WV_SP_TIMERES 6.0  /* hours */
+    char FUNC_NAME[] = "open_gb_oz_wv_datasets";       /* function name */
+    char errmsg[STR_SIZE*2];  /* error message */
+    int i, j, ii, jj;         /* looping variables */
+    double diff, firstsod, secondsod, firstweight, secondweight;
+    FILE *fd;
+    char where[50];
+    int grib_ret, ny, nx, daydiff;
+    int isGrb2, Grb2_file(char *filename);  /* below */
+    void get_new_where(char *where);        /* below */
+    int read_grib_array(FILE *input, char *what, char *where, int *nx, int *ny, float **narray);
+    int read_grib_date(FILE *input, char *what, char *where, char *date, int *frcst_hrs);
+    int read_grib2_array(char *filename, char *what, char *where, int *nx, int *ny, float **narray);
+    int read_grib2_date(char *filename, char *what, char *where, char *date, int *frcst_hrs);
+    static float *tmpfltarray[2][2] = {{NULL, NULL}, {NULL, NULL}};  /* one for WV, one for OZ */
+    float valueone, valuetwo;
+    char string_string[256] = {'\0'};
+    int frcst_hrs, swapped, Yscale, Xscale;
+    Date_t firstdate, seconddate;
+    int32 NearlyZero(double x);  /* below */
+    long k, l;
+        
+	
+    /*printf("file1 %s, file2 %s\n", filename, file2name);*/
+
+/*
+PWAT time one is 2018-08-04T12:00:00.000000Z
+TOZNE time one is 2018-08-04T12:00:00.000000Z
+PWAT time two is 2018-08-04T18:00:00.000000Z
+TOZNE time two is 2018-08-04T18:00:00.000000Z*/
+
+    /* Process time one */
+    isGrb2 = Grb2_file(filename);
+    if ((fd = fopen(filename, "rb")) == NULL) {
+        sprintf (errmsg, "Unable to open %s for reading as SDS", filename);
+        error_handler (true, FUNC_NAME, errmsg);
+        return (ERROR);
+     }
+     
+    strcpy(where, "atmos col");
+    if (isGrb2 == 1) {
+       grib_ret = read_grib_array(fd, "PWAT", where, &ny, &nx, &tmpfltarray[0][0]);
+       read_grib_date(fd, "PWAT", where, string_string, &frcst_hrs);
+       }
+    else if (isGrb2 == 2) {
+  	get_new_where(where);
+   	grib_ret = read_grib2_array(filename, "PWAT", where, &ny, &nx, &tmpfltarray[0][0]);
+        read_grib2_date(filename, "PWAT", where, string_string, &frcst_hrs);
+    }
+    /*printf("PWAT time one is %s\n", string_string);*/
+    date_init (&firstdate, string_string, DATE_FORMAT_DATEA_TIME);
+    
+    strcpy(where, "atmos col");
+    if (isGrb2 == 1) {
+       grib_ret = read_grib_array(fd, "TOZNE", where, &ny, &nx, &tmpfltarray[1][0]);
+       }
+    else if (isGrb2 == 2) {
+   	get_new_where(where);
+   	grib_ret = read_grib2_array(filename, "TOZNE", where, &ny, &nx, &tmpfltarray[1][0]);
+    }
+   
+    fclose(fd);
+    
+    
+    /* Process time two */
+    isGrb2 = Grb2_file(file2name);
+    if ((fd = fopen(file2name, "rb")) == NULL) {
+        sprintf (errmsg, "Unable to open %s for reading as SDS", file2name);
+        error_handler (true, FUNC_NAME, errmsg);
+        return (ERROR);
+     }
+
+    strcpy(where, "atmos col");
+    if (isGrb2 == 1) {
+       grib_ret = read_grib_array(fd, "PWAT", where, &ny, &nx, &tmpfltarray[0][1]);
+       read_grib_date(fd, "PWAT", where, string_string, &frcst_hrs);
+       }
+    else if (isGrb2 == 2) {
+   	get_new_where(where);
+   	grib_ret = read_grib2_array(file2name, "PWAT", where, &ny, &nx, &tmpfltarray[0][1]);
+        read_grib2_date(file2name, "PWAT", where, string_string, &frcst_hrs);
+    }
+    /*printf("PWAT time two is %s\n", string_string);*/
+    date_init (&seconddate, string_string, DATE_FORMAT_DATEA_TIME);
+    
+    strcpy(where, "atmos col");
+    if (isGrb2 == 1) {
+       grib_ret = read_grib_array(fd, "TOZNE", where, &ny, &nx, &tmpfltarray[1][1]);
+       }
+    else if (isGrb2 == 2) {
+   	get_new_where(where);
+   	grib_ret = read_grib2_array(file2name, "TOZNE", where, &ny, &nx, &tmpfltarray[1][1]);
+    }
+  
+    fclose(fd);
+
+/* Now, use these timestamps to temporally interpolate between the two GRIB files to the acquisition time */
+    printf("in open_gb_oz_wv_datasets()   Acquisition date, time: %ld, %lf\n", date.jday2000, date.sod); 
+    printf("in open_gb_oz_wv_datasets()   First date, time: %ld, %lf\n", firstdate.jday2000, firstdate.sod); 
+    printf("in open_gb_oz_wv_datasets()   Second date, time: %ld, %lf\n", seconddate.jday2000, seconddate.sod); 
+
+/* First off, make sure the jday2000 values are all the same! */
+/* Or if they differ, only off by 1 day */
+
+    daydiff = firstdate.jday2000 - seconddate.jday2000;
+    if ( daydiff < 0 ) daydiff = -daydiff;
+    
+    if ( daydiff > 1 )
+    {
+        sprintf (errmsg, "GRIB file staging problem: Jdays of GRIB files are %ld and %ld "
+            "(should be the same)",  firstdate.jday2000, seconddate.jday2000);
+        error_handler (true, FUNC_NAME, errmsg);
+        return (ERROR);
+    }
+    
+    daydiff = date.jday2000 - seconddate.jday2000;
+    if ( daydiff < 0 ) daydiff = -daydiff;
+    
+    if ( daydiff > 1 )
+    {
+        sprintf (errmsg, "GRIB file staging problem: Jday of GRIB file %ld doesn't match acquisition Jday of %ld "
+            "(should be the same)",  seconddate.jday2000, date.jday2000);
+        error_handler (true, FUNC_NAME, errmsg);
+        return (ERROR);
+    }
+
+
+/* And grib difference is indeed GRIB_WV_SP_TIMERES (6 hours) */
+
+    secondsod = seconddate.sod;
+    firstsod = firstdate.sod;
+    
+    daydiff = seconddate.jday2000 - firstdate.jday2000;
+    /*printf("%d %d %d %lf\n", daydiff, seconddate.jday2000, firstdate.jday2000, secondsod);*/
+    if (( daydiff == 1 ) && (secondsod == 0.0)) secondsod += 86400.0;  /* after midnight, next day */
+    /*printf("%lf %lf\n", firstsod, secondsod );*/
+    
+    /*swapped = 0;
+    if ( secondsod < firstsod )  {  / * files were entered in reverse order, swap the weights and keep track of this swap! * /
+       diff = secondsod;
+       secondsod = firstsod;
+       firstsod = diff;
+       swapped = 1;
+       }*/
+    
+    diff = (secondsod - firstsod)/3600.0;
+    
+    if ( !NearlyZero(diff - GRIB_WV_SP_TIMERES) )
+    {
+        sprintf (errmsg, "GRIB file staging problem: time difference is %lf, should be %lf", diff, GRIB_WV_SP_TIMERES);
+        error_handler (true, FUNC_NAME, errmsg);
+        return (ERROR);
+    }
+
+/* And acquisition sod is indeed between the GRIB files' sods */
+
+   if (( secondsod >= date.sod) && ( date.sod >= firstsod) ) {
+      ;  /* no problem do nothing */
+      }
+   else {
+      sprintf (errmsg, "Wrong GRIB files were staged (acq. time %lf, GRIB times %lf and %lf) ", date.sod, secondsod, firstsod);
+      error_handler (true, FUNC_NAME, errmsg);
+      return (ERROR);
+      }
+
+/* So get the weights and weigh each GRIB file accordingly */
+
+   secondweight = (date.sod - firstsod)/(secondsod - firstsod);
+   firstweight = -(date.sod - secondsod)/(secondsod - firstsod);
+   printf("in open_gb_oz_wv_datasets()   First weight %lf\n", firstweight); 
+   printf("in open_gb_oz_wv_datasets()   Second weight %lf\n", secondweight); 
+   //printf("%d %d\n", ny,  nx); 
+
+   for (i = 0; i < 2; i++) {   /* PWAT, TOZNE */
+   for (j = 0; j < ny*nx; j++) {
+       if (swapped == 0) {
+          valueone = tmpfltarray[i][0][j];
+          valuetwo = tmpfltarray[i][1][j];
+	  }
+        else {
+          valueone = tmpfltarray[i][1][j];
+          valuetwo = tmpfltarray[i][0][j];
+	  }
+       
+       tmpfltarray[i][0][j] = (valueone*firstweight) + (valuetwo*secondweight);
+      }
+      }
+
+/* Now, extrapolate the 1 pixel-per-degree data in tmpfltarray (GDAS) into 20-pixels-per-degree data, to match 
+ * CMG-format data */ 
+
+   Yscale = CMG_NBLAT/(ny-1);  /* ny is 181 for GDAS, 361 for others...  */
+   Xscale = CMG_NBLON/nx;
+ 
+   l = 0L;
+   for (i = 0; i < CMG_NBLAT; i++) {
+	 ii = (i/Yscale);
+	 k = ii*nx;
+	 for (j = 0; j < CMG_NBLON; j++) {
+	     jj = (j/Xscale);
+
+	     wv[l] = (uint16)(tmpfltarray[0][0][k+jj]*10.0);
+	     oz[l] = (uint8)(tmpfltarray[1][0][k+jj]*0.40);  /* divide by 1000 to convert from Dobsons to cm-atm, then multiply by 400 to scale */
+             l++;
+	 }
+     }
+
+
+/*int32 sd,sds,dims[2],start[2];
+sd = SDstart("whatever.hdf", DFACC_CREATE);
+dims[0] = CMG_NBLAT;
+dims[1] = CMG_NBLON;
+start[0] = start[1] = 0;
+sds = SDcreate(sd, "water_vapor", DFNT_UINT16, 2, dims);
+SDwritedata(sds, start, NULL, dims, wv);
+SDendaccess(sds);
+sds = SDcreate(sd, "ozone", DFNT_UINT8, 2, dims);
+SDwritedata(sds, start, NULL, dims, oz);
+SDendaccess(sds);
+SDend(sd);*/
+
+
+
+
+return (0);
+
+}
+
+int32 NearlyZero(double x)
+{
+   const double limit = 1.0e-10F;
+
+   return -(x < limit && x > -limit);
+}
+
+
+/******************************************************************************
 MODULE:  read_auxiliary_files
 
 PURPOSE:  Reads the auxiliary files required for this application.
@@ -2883,6 +3143,7 @@ int read_auxiliary_files
     char *cmgdemnm,     /* I: climate modeling grid DEM filename */
     char *rationm,      /* I: ratio averages filename */
     char *auxnm,        /* I: auxiliary filename for ozone and water vapor */
+    char *aux2nm,       /* I: 2nd auxiliary filename for ozone and water vapor (23-FEB-26, JPR) */
     aux_src_t aux_src,  /* I: indentifies the source of atmospheric aux data */
     int16 *dem,         /* O: CMG DEM data array [DEM_NBLAT x DEM_NBLON] */
     int16 *andwi,       /* O: avg NDWI [RATIO_NBLAT x RATIO_NBLON] */
@@ -2897,7 +3158,8 @@ int read_auxiliary_files
     int16 *slpratiob2,  /* O: slope band2 ratio [RATIO_NBLAT x RATIO_NBLON] */
     int16 *slpratiob7,  /* O: slope band7 ratio [RATIO_NBLAT x RATIO_NBLON] */
     uint16 *wv,         /* O: water vapor values [CMG_NBLAT x CMG_NBLON] */
-    uint8 *oz           /* O: ozone values [CMG_NBLAT x CMG_NBLON] */
+    uint8 *oz,           /* O: ozone values [CMG_NBLAT x CMG_NBLON] */
+    Date_t date
 )
 {
     char FUNC_NAME[] = "read_auxiliary_files"; /* function name */
@@ -2912,6 +3174,8 @@ int read_auxiliary_files
     int sd_id;           /* file ID for the HDF file */
     int sds_id;          /* ID for the current SDS */
     int sds_index;       /* index for the current SDS */
+    
+    /*printf("Acquisition date, time: %ld, %lf\n", date.jday2000, date.sod); */
 
     /*** Read the DEM ***/
     sd_id = SDstart (cmgdemnm, DFACC_RDONLY);
@@ -3491,9 +3755,11 @@ int read_auxiliary_files
 
     /* Read ozone and water vapor from the user-specified auxiliary file */
     if (aux_src == VIIRS)
-        status = open_h5_oz_wv_datasets (auxnm, wv, oz);
-    else
+        status = open_h5_oz_wv_datasets (auxnm, wv, oz);  /* I'm assuming VIIRS or MODIS aux data will only be 1 file */
+    else if (aux_src == MODIS)
         status = open_h4_oz_wv_datasets (auxnm, wv, oz);
+    else /* GRIB...? */
+        status = open_gb_oz_wv_datasets (auxnm, aux2nm, wv, oz, date);
     if (status != SUCCESS)
     {
         sprintf(errmsg, "Error parsing file: %s", auxnm);
@@ -3503,5 +3769,72 @@ int read_auxiliary_files
 
     /* Successful completion */
     return (SUCCESS);
+}
+
+int Grb2_file(char *filename) { /* returns 1 for GRIB1, 2 for GRIB2, 0 for unknown but still GRIB, -1 for error */
+    int8 tag[8];
+    char ctag[5];
+    long k;
+    FILE *fd;
+    int ret = -1;
+
+    for (k = 0; k < 5; k++) ctag[k] = '\0';
+
+    if ((fd = fopen(filename, "rb")) == (FILE *)NULL) {
+        printf("Cannot open file %s\n", filename);
+        return (ret);
+    }
+
+    fseek(fd, 0L, SEEK_SET);
+    fseek(fd, 0L, SEEK_END);
+    k = ftell(fd);
+    if (k < 8) {
+        printf("File is %ld bytes long -- cannot continue...\n", k);
+        return (ret);
+    }
+    fseek(fd, 0L, SEEK_SET);
+
+    if (fread(tag, 1, 8, fd) != 8) {
+        printf("Error reading from file %s, cannot continue\n", filename);
+        return (ret);
+    }
+    fclose(fd);
+
+    for (k = 0; k < 4; k++) ctag[k] = (char)tag[k];
+
+    // printf("%s %d\n", ctag, tag[7]);
+
+    if (!strcmp(ctag, "GRIB")) {
+        if (tag[7] == 1)
+            return (1);
+        else if (tag[7] == 2)
+            return (2);
+        else
+            return (0);
+    }
+
+    return (ret);
+}
+
+/* New, v6.4.11 (23-MAR-21) -- when reading GRIB2, the 'where' changes --
+   it is set for GRIB1 by default, must be updated.  'what' comes along
+   just in case (not currently necessary).
+
+   Note that these 'where' switches depend upon the type of GRIB2 file
+   being read -- these 'where's were written based upon ordinary GDAS files,
+   e. g., gdas1.PGrb2F00.210104.00z, but other types of files (gdas.t00z.pgrb2.1p00.anl)
+   have different 'where' values.  Finalize the new 'where' (e. g., "2 m above ground"
+   or "30-0 mb above ground") once the actual source of the new GRIB2 GDAs has stabilized.
+
+*/
+
+void get_new_where(char *where) {
+    if (!strcmp(where, "atmos col")) strcpy(where, "entire atmosphere (considered as a single layer)");
+    if (!strcmp(where, "MSL")) strcpy(where, "mean sea level");
+    if (!strcmp(where, "2 m above gnd")) /*strcpy(where, "2 m above ground");*/
+        strcpy(where, "30-0 mb above ground");
+    if (!strcmp(where, "10 m above gnd")) /*strcpy(where, "10 m above ground");*/
+        strcpy(where, "1000 mb");
+    return;
 }
 

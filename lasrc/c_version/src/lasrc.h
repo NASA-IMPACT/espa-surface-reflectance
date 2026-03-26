@@ -35,6 +35,8 @@ int get_args
     char **xml_infile,    /* O: address of input XML file */
     char **aux_infile,    /* O: address of input auxiliary file containing
                                 water vapor and ozone */
+    char **aux2_infile,   /* O: address of second input auxiliary file containing
+                                water vapor and ozone -- 23-FEB-26, JPR  */
     bool *process_sr,     /* O: process the surface reflectance products */
     bool *write_toa,      /* O: write intermediate TOA products flag */
     bool *use_orig_aero,  /* O: use the original aerosol interpolation algorithm
@@ -103,6 +105,7 @@ int compute_landsat_sr_refl
     char *cmgdemnm,     /* I: climate modeling grid (CMG) DEM filename */
     char *rationm,      /* I: ratio averages filename */
     char *auxnm,        /* I: auxiliary filename for ozone and water vapor */
+    char *aux2nm,       /* I: 2nd auxiliary filename for ozone and water vapor */
     aux_src_t aux_src   /* I: identifies the source of atmospheric aux data */
 );
 
@@ -130,6 +133,7 @@ int compute_sentinel_sr_refl
     char *cmgdemnm,     /* I: climate modeling grid DEM filename */
     char *rationm,      /* I: ratio averages filename */
     char *auxnm,        /* I: auxiliary filename for ozone and water vapor */
+    char *aux2nm,       /* I: 2nd auxiliary filename for ozone and water vapor */
     aux_src_t aux_src   /* I: identifies the source of atmospheric aux data */
 );
 
@@ -147,6 +151,7 @@ int init_sr_refl
     char *cmgdemnm,     /* I: climate modeling grid DEM filename */
     char *rationm,      /* I: ratio averages filename */
     char *auxnm,        /* I: auxiliary filename for ozone and water vapor */
+    char *aux2nm,       /* I: 2nd auxiliary filename for ozone and water vapor (23-FEB-26, JPR) */
     aux_src_t aux_src,  /* I: Identifies the source of atmospheric aux data */
     float *eps,         /* O: angstrom coefficient */
     int *iaots,         /* O: index for AOTs */

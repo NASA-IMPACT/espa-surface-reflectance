@@ -10,8 +10,10 @@
 #define FILL_VALUE_AERO -9999
 
 /* written to XML file for users of the SR data */
-#define SCALE_FACTOR_REFL 0.0000275
-#define OFFSET_REFL -0.20
+/*#define SCALE_FACTOR_REFL 0.0000275*/
+#define SCALE_FACTOR_REFL 0.0001
+/*#define OFFSET_REFL -0.20*/
+#define OFFSET_REFL 0.0
 #define SCALE_FACTOR_TH 0.00341802
 #define OFFSET_TH 149.0
 #define SCALE_FACTOR_AERO 0.001

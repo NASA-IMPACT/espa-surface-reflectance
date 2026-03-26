@@ -58,6 +58,7 @@ int init_sr_refl
     char *cmgdemnm,     /* I: climate modeling grid DEM filename */
     char *rationm,      /* I: ratio averages filename */
     char *auxnm,        /* I: auxiliary filename for ozone and water vapor */
+    char *aux2nm,       /* I: 2nd auxiliary filename for ozone and water vapor (23-FEB-26, JPR) */
     aux_src_t aux_src,  /* I: Identifies the source of atmospheric aux data */
     float *eps,         /* O: angstrom coefficient */
     int *iaots,         /* O: index for AOTs */
@@ -148,6 +149,7 @@ int init_sr_refl
 
         /* Convert xfi to degrees */
         *xfi = *xfi * RAD2DEG;
+		
     }
 
     /* Initialize the look up tables */
@@ -176,9 +178,14 @@ int init_sr_refl
 
     /* Read the auxiliary data files used as input to the reflectance
        calculations */
-    retval = read_auxiliary_files (cmgdemnm, rationm, auxnm, aux_src, dem,
+       
+
+    /*printf("Acquisition date, time: %ld, %lf\n", input->meta.acq_date.jday2000, input->meta.acq_date.hour); */
+
+
+    retval = read_auxiliary_files (cmgdemnm, rationm, auxnm, aux2nm, aux_src, dem,
         andwi, sndwi, ratiob1, ratiob2, ratiob7, intratiob1, intratiob2,
-        intratiob7, slpratiob1, slpratiob2, slpratiob7, wv, oz);
+        intratiob7, slpratiob1, slpratiob2, slpratiob7, wv, oz, input->meta.acq_date);  /* for GRIB inputs */
     if (retval != SUCCESS)
     {
         sprintf (errmsg, "Reading the auxiliary files");

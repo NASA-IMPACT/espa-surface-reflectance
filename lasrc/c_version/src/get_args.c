@@ -30,6 +30,8 @@ int get_args
     char **xml_infile,    /* O: address of input XML file */
     char **aux_infile,    /* O: address of input auxiliary file containing
                                 water vapor and ozone */
+    char **aux2_infile,   /* O: address of second input auxiliary file containing
+                                water vapor and ozone -- 23-FEB-26, JPR  */
     bool *process_sr,     /* O: process the surface reflectance products */
     bool *write_toa,      /* O: write intermediate TOA products flag */
     bool *use_orig_aero,  /* O: use the original aerosol interpolation algorithm
@@ -53,6 +55,7 @@ int get_args
         {"use_orig_aero_alg", no_argument, &use_orig_aero_flag, 1},
         {"xml", required_argument, 0, 'i'},
         {"aux", required_argument, 0, 'a'},
+        {"aux2", optional_argument, 0, 'b'},  /* 23-FEB-26, JPR */
         {"process_sr", required_argument, 0, 'p'},
         {"help", no_argument, 0, 'h'},
         {"version", no_argument, &version_flag, 1},
@@ -95,6 +98,10 @@ int get_args
      
             case 'a':  /* auxiliary input file */
                 *aux_infile = strdup (optarg);
+                break;
+     
+            case 'b':  /* second auxiliary input file -- 23-FEB-26, JPR */
+                *aux2_infile = strdup (optarg);
                 break;
      
             case 'p':  /* process SR products */

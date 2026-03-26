@@ -67,7 +67,9 @@ bool date_init
 
     /* Grab the length of the input date string */
     len = strlen (s);
- 
+
+    /*printf("String = %s\n", s); */
+
     /* Handle each format, verifying the format itself (i.e. string length and
        other characters) then separate the date and the time based on the
        characteristics of the format.  This will obtain a pointer to the
