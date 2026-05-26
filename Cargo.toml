@@ -1,0 +1,3 @@
+[workspace]
+members = ["lasrc_core", "lasrc_py"]
+resolver = "2"

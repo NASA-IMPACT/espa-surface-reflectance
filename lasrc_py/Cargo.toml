@@ -1,0 +1,13 @@
+[package]
+name = "lasrc_py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lasrc"
+crate-type = ["cdylib"]
+
+[dependencies]
+lasrc_core = { path = "../lasrc_core" }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"

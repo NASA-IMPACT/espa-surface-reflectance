@@ -1,0 +1,9 @@
+[package]
+name = "lasrc_core"
+version = "0.1.0"
+edition = "2021"
+description = "LaSRC atmospheric correction core algorithms"
+
+[dependencies]
+ndarray = "0.16"
+rayon = "1.10"
