@@ -1,3 +1,4 @@
+pub mod aerosol;
 pub mod atmospheric;
 pub mod constants;
 pub mod gas_transmission;
