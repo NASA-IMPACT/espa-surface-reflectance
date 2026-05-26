@@ -57,11 +57,12 @@ pub struct SurfaceReflectanceResult {
 /// Returns (row, col) clamped to valid ranges.
 fn latlon_to_cmg(lat: f64, lon: f64) -> (usize, usize) {
     // Row 0 is at +90, row 3599 is at -90 (north-to-south)
-    let row = ((90.0 - lat) / 0.05).floor() as isize;
+    // Use truncation (as isize) to match C code's (int) cast behavior
+    let row = ((90.0 - lat) / 0.05) as isize;
     let row = row.clamp(0, (CMG_NBLAT - 1) as isize) as usize;
 
     // Col 0 is at -180, col 7199 is at +180 (west-to-east)
-    let col = ((lon + 180.0) / 0.05).floor() as isize;
+    let col = ((lon + 180.0) / 0.05) as isize;
     let col = col.clamp(0, (CMG_NBLON - 1) as isize) as usize;
 
     (row, col)
@@ -86,16 +87,16 @@ fn extract_atm_params(aux: &AuxiliaryData, lat: f64, lon: f64) -> (f64, f64, f64
     };
     let pressure = pressure_from_elevation(elevation);
 
-    // Water vapor
+    // Water vapor (raw DN divided by scale factor to get physical units)
     let uwv = if cmg_idx < aux.wv.len() && aux.wv[cmg_idx] > 0 {
-        aux.wv[cmg_idx] as f64 * aux.wv_scale
+        aux.wv[cmg_idx] as f64 / aux.wv_scale
     } else {
         aux.wv_default
     };
 
-    // Ozone
+    // Ozone (raw DN divided by scale factor to get physical units)
     let uoz = if cmg_idx < aux.oz.len() && aux.oz[cmg_idx] > 0 {
-        aux.oz[cmg_idx] as f64 * aux.oz_scale
+        aux.oz[cmg_idx] as f64 / aux.oz_scale
     } else {
         aux.oz_default
     };
@@ -201,8 +202,9 @@ fn build_erelc(
         // For land: set band ratios relative to the red band
         // The red band is the reference (iband1), erelc for it is not used
         // directly but erelc for other bands encodes ratio to red.
-        erelc[bi.blue] = rb1;
-        erelc[bi.red] = rb2;
+        erelc[bi.coastal] = rb1;
+        erelc[bi.blue] = rb2;
+        erelc[bi.red] = 1.0; // reference band is always 1.0
         erelc[bi.swir1] = rb7;
     }
 
