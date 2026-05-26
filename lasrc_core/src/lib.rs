@@ -1,6 +1,7 @@
 pub mod aerosol;
 pub mod atmospheric;
 pub mod constants;
+pub mod correction;
 pub mod gas_transmission;
 pub mod geometry;
 pub mod lut;
