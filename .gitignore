@@ -20,3 +20,9 @@ lasrc/c_version/src/lasrc
 lasrc/c_version/src_pre_collection/lasrc_pre_collection
 lasrc/landsat_aux/src/gapfill_viirs_aux
 
+# Rust build artifacts
+/target/
+lasrc_core/target/
+lasrc_py/target/
+Cargo.lock
+
