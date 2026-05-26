@@ -1,3 +1,4 @@
+pub mod atmospheric;
 pub mod constants;
 pub mod gas_transmission;
 pub mod geometry;
