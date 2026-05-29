@@ -279,8 +279,17 @@ fn precompute_coefficients(
         let ttatmg_coef = get_3rd_order_poly_coeff(&AOT550NM, &ttatmg_vals);
         let satm_coef = get_3rd_order_poly_coeff(&AOT550NM, &satm_vals);
 
-        // Upper bound for scaled AOT: use the max AOT value
-        let roatm_upper = AOT550NM[NAOT_VALS - 1];
+        // Find the last AOT index where roatm is still monotonically increasing.
+        // The polynomial fit is unreliable beyond this point, so we clamp AOT
+        // to this value during aerosol retrieval. Matches C code's roatm_iaMax logic.
+        let mut ia_max = NAOT_VALS - 1;
+        for ia in 1..NAOT_VALS {
+            if roatm_vals[ia] - roatm_vals[ia - 1] <= 1.0e-5 {
+                ia_max = ia - 1;
+                break;
+            }
+        }
+        let roatm_upper = AOT550NM[ia_max];
 
         coefficients.push(AtmCorrCoefficients {
             roatm_upper,
