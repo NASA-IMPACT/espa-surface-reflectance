@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 
 use lasrc_core::constants::NSOLAR_ZEN_VALS;
 use lasrc_core::correction::{AuxiliaryData, compute_surface_reflectance};
+use lasrc_core::geometry::SpaceDef;
 use lasrc_core::lut::LookupTables;
 use lasrc_core::sensor::{Landsat8, Landsat9, Sentinel2A, Sentinel2B, Sentinel2C, Sensor};
 
@@ -126,7 +127,12 @@ impl PyAuxiliaryData {
 ///     Input QA / fill mask (0 = fill).
 /// lut : PyLookupTables
 /// aux : PyAuxiliaryData
-/// scene_center_lat, scene_center_lon : float
+/// ul_corner_x, ul_corner_y : float
+///     Upper-left corner coordinates in UTM meters.
+/// pixel_size_x, pixel_size_y : float
+///     Pixel size in meters (e.g. 30.0 for Landsat).
+/// utm_zone : int
+///     UTM zone number; negative for southern hemisphere.
 /// use_orig_aero : bool
 ///
 /// Returns
@@ -150,8 +156,11 @@ fn process_surface_reflectance<'py>(
     qa_band: PyReadonlyArray2<'py, u16>,
     lut: &PyLookupTables,
     aux: &PyAuxiliaryData,
-    scene_center_lat: f64,
-    scene_center_lon: f64,
+    ul_corner_x: f64,
+    ul_corner_y: f64,
+    pixel_size_x: f64,
+    pixel_size_y: f64,
+    utm_zone: i32,
     use_orig_aero: bool,
 ) -> PyResult<PyObject> {
     let sensor: Box<dyn Sensor> = match sensor_name {
@@ -171,6 +180,13 @@ fn process_surface_reflectance<'py>(
     let toa_views: Vec<_> = toa_bands.iter().map(|a| a.as_array()).collect();
     let bt_views: Vec<_> = bt_bands.iter().map(|a| a.as_array()).collect();
 
+    let space_def = SpaceDef {
+        ul_corner_x,
+        ul_corner_y,
+        pixel_size: [pixel_size_x, pixel_size_y],
+        zone: utm_zone,
+    };
+
     let result = compute_surface_reflectance(
         sensor.as_ref(),
         &toa_views,
@@ -182,8 +198,7 @@ fn process_surface_reflectance<'py>(
         &qa_band.as_array(),
         &lut.inner,
         &aux.inner,
-        scene_center_lat,
-        scene_center_lon,
+        &space_def,
         use_orig_aero,
     );
 

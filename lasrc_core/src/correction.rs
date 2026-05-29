@@ -9,6 +9,7 @@ use crate::aerosol::{aerosol_interp, fix_invalid_aerosols, subaeroret_new};
 use crate::atmospheric::{atmcorlamb2, atmcorlamb2_new, AtmCorrCoefficients};
 use crate::constants::*;
 use crate::gas_transmission::GasCoefficients;
+use crate::geometry::{utm_to_deg, SpaceDef};
 use crate::lut::LookupTables;
 use crate::sensor::Sensor;
 use crate::utils::get_3rd_order_poly_coeff;
@@ -327,8 +328,7 @@ pub fn compute_surface_reflectance(
     qa_band: &ArrayView2<u16>,
     lut: &LookupTables,
     aux: &AuxiliaryData,
-    scene_center_lat: f64,
-    scene_center_lon: f64,
+    space_def: &SpaceDef,
     _use_orig_aero: bool,
 ) -> SurfaceReflectanceResult {
     let (nlines, nsamps) = toa_bands[0].dim();
@@ -338,6 +338,10 @@ pub fn compute_surface_reflectance(
     let half_aero_window = sensor.half_aerosol_window();
 
     // ── Step 1: Scene-center atmospheric state ──
+    let center_line_geo = (nlines / 2) as i32;
+    let center_samp_geo = (nsamps / 2) as i32;
+    let (scene_center_lat, scene_center_lon) =
+        utm_to_deg(space_def, center_line_geo, center_samp_geo);
     let (pressure, uoz, uwv) = extract_atm_params(aux, scene_center_lat, scene_center_lon);
 
     // Scene-center geometry (use center pixel angles)
@@ -425,10 +429,8 @@ pub fn compute_surface_reflectance(
                 continue;
             }
 
-            // Determine pixel lat/lon from scene center (approximate; for CMG lookup)
-            // In a full implementation this would use utm_to_deg or per-pixel geo arrays
-            let pixel_lat = scene_center_lat;
-            let pixel_lon = scene_center_lon;
+            // Compute per-pixel lat/lon from image coordinates
+            let (pixel_lat, pixel_lon) = utm_to_deg(space_def, iline as i32, isamp as i32);
 
             // Look up band ratios and water flag
             let (rb1, rb2, rb7) = lookup_band_ratios(aux, pixel_lat, pixel_lon);

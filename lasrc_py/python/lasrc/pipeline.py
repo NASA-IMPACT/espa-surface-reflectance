@@ -47,8 +47,6 @@ def process_scene(
     transform = profile["transform"]
     nlines = profile["height"]
     nsamps = profile["width"]
-    center_x = transform.c + nsamps / 2 * transform.a
-    center_y = transform.f + nlines / 2 * transform.e
 
     angles = scene["angles"]
     if "sza" in angles:
@@ -62,6 +60,12 @@ def process_scene(
         vza = np.full((nlines, nsamps), 0.0, dtype=np.float32)
         vaa = np.full((nlines, nsamps), 0.0, dtype=np.float32)
 
+    # Extract UTM geotransform for per-pixel coordinate conversion
+    # transform.c = UL x, transform.f = UL y, transform.a = pixel width, transform.e = pixel height (neg)
+    utm_zone = profile.get("utm_zone", profile["crs"].to_epsg() % 100)
+    if profile["crs"].to_epsg() > 32700:
+        utm_zone = -utm_zone  # Southern hemisphere
+
     result = _lasrc.process_surface_reflectance(
         sensor_name=sensor_name,
         toa_bands=scene["toa_bands"],
@@ -73,8 +77,11 @@ def process_scene(
         qa_band=scene["qa_band"],
         lut=lut,
         aux=aux,
-        scene_center_lat=center_y,
-        scene_center_lon=center_x,
+        ul_corner_x=transform.c,
+        ul_corner_y=transform.f,
+        pixel_size_x=transform.a,
+        pixel_size_y=abs(transform.e),
+        utm_zone=utm_zone,
         use_orig_aero=use_orig_aero,
     )
 
