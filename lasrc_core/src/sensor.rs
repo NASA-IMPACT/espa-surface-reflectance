@@ -4,7 +4,10 @@ use crate::constants::{
     LAERO_WINDOW, LHALF_AERO_WINDOW, LFIX_AERO_WINDOW, LHALF_FIX_AERO_WINDOW, LMIN_CLEAR_PIX,
     SAERO_WINDOW, SFIX_AERO_WINDOW, SHALF_FIX_AERO_WINDOW, SMIN_CLEAR_PIX,
     TAURAY_LANDSAT, LAMBDA_LANDSAT, LAMBDA_SENTINEL,
+    OZTRANSA_LANDSAT, WVTRANSA_LANDSAT, WVTRANSB_LANDSAT,
+    OGTRANSA1_LANDSAT, OGTRANSB0_LANDSAT, OGTRANSB1_LANDSAT,
 };
+use crate::gas_transmission::GasCoefficients;
 
 /// Configuration for a single spectral band.
 #[derive(Debug, Clone)]
@@ -40,6 +43,7 @@ pub trait Sensor: Send + Sync {
     fn band_indices(&self) -> &BandIndices;
     fn tauray(&self) -> &[f64];
     fn lambda(&self) -> &[f64];
+    fn gas_coefficients(&self) -> Vec<GasCoefficients>;
     fn num_refl_bands(&self) -> usize {
         self.reflectance_bands().len()
     }
@@ -116,6 +120,20 @@ pub struct Sentinel2B;
 /// Sentinel-2C sensor.
 pub struct Sentinel2C;
 
+/// Build gas coefficient vector for Landsat bands from hardcoded constants.
+fn landsat_gas_coefficients() -> Vec<GasCoefficients> {
+    (0..OZTRANSA_LANDSAT.len())
+        .map(|i| GasCoefficients {
+            oztransa: OZTRANSA_LANDSAT[i],
+            wvtransa: WVTRANSA_LANDSAT[i],
+            wvtransb: WVTRANSB_LANDSAT[i],
+            ogtransa1: OGTRANSA1_LANDSAT[i],
+            ogtransb0: OGTRANSB0_LANDSAT[i],
+            ogtransb1: OGTRANSB1_LANDSAT[i],
+        })
+        .collect()
+}
+
 // ── Landsat 8 impl ─────────────────────────────────────────────────────────
 
 impl Sensor for Landsat8 {
@@ -131,6 +149,9 @@ impl Sensor for Landsat8 {
     fn band_indices(&self) -> &BandIndices { &LANDSAT_BAND_INDICES }
     fn tauray(&self) -> &[f64] { &TAURAY_LANDSAT }
     fn lambda(&self) -> &[f64] { &LAMBDA_LANDSAT }
+    fn gas_coefficients(&self) -> Vec<GasCoefficients> {
+        landsat_gas_coefficients()
+    }
 }
 
 // ── Landsat 9 impl ─────────────────────────────────────────────────────────
@@ -148,6 +169,9 @@ impl Sensor for Landsat9 {
     fn band_indices(&self) -> &BandIndices { &LANDSAT_BAND_INDICES }
     fn tauray(&self) -> &[f64] { &TAURAY_LANDSAT }
     fn lambda(&self) -> &[f64] { &LAMBDA_LANDSAT }
+    fn gas_coefficients(&self) -> Vec<GasCoefficients> {
+        landsat_gas_coefficients()
+    }
 }
 
 // ── Sentinel-2 shared impl helper (macro) ─────────────────────────────────
@@ -169,6 +193,9 @@ macro_rules! impl_sentinel_sensor {
                 todo!("Sentinel Rayleigh values loaded from LUT")
             }
             fn lambda(&self) -> &[f64] { &LAMBDA_SENTINEL }
+            fn gas_coefficients(&self) -> Vec<GasCoefficients> {
+                todo!("Sentinel gas coefficients from gascoef-msi.ASC")
+            }
         }
     };
 }

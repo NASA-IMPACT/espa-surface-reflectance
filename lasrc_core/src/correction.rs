@@ -357,19 +357,8 @@ pub fn compute_surface_reflectance(
     };
     let cosxfi_center = (xfi_center * DEG2RAD).cos();
 
-    // Build gas coefficients per band from LUT data.
-    // For now, use placeholder gas coefficients (these would normally come from
-    // a sensor-specific table loaded alongside the LUT).
-    let gas_coeff: Vec<GasCoefficients> = (0..nbands)
-        .map(|_| GasCoefficients {
-            ogtransa1: 0.00014,
-            ogtransb0: 0.00527,
-            ogtransb1: 0.00015,
-            wvtransa: 2.29849e-27,
-            wvtransb: 14.77305,
-            oztransa: -0.00160,
-        })
-        .collect();
+    // Build gas coefficients per band from sensor-specific constants.
+    let gas_coeff: Vec<GasCoefficients> = sensor.gas_coefficients();
 
     // ── Step 2: Pre-compute polynomial coefficients at scene center ──
     let (atm_coeff, tgo_arr, normext_p0a3) = precompute_coefficients(

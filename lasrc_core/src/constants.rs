@@ -115,6 +115,33 @@ pub const LAMBDA_SENTINEL: [f64; 11] = [
     0.443, 0.490, 0.560, 0.665, 0.705, 0.740, 0.783, 0.842, 0.865, 1.61, 2.19,
 ];
 
+// Gas transmission coefficients per Landsat band (from 6S model, gascoef-ldcm.ASC)
+// Array order: bands 1,2,3,4,5,6,7,9
+pub const OZTRANSA_LANDSAT: [f64; NSRL_BANDS] = [
+    -0.00255649, -0.0177861, -0.0969872, -0.0611428,
+    0.0001, 0.0001, 0.0001, -0.0834061,
+];
+pub const WVTRANSA_LANDSAT: [f64; NSRL_BANDS] = [
+    2.29849e-27, 2.29849e-27, 0.00194772, 0.00404159,
+    0.000729136, 0.00067324, 0.0177533, 0.00279738,
+];
+pub const WVTRANSB_LANDSAT: [f64; NSRL_BANDS] = [
+    0.999742, 0.999742, 0.775024, 0.774482,
+    0.893085, 0.939669, 0.65094, 0.759952,
+];
+pub const OGTRANSA1_LANDSAT: [f64; NSRL_BANDS] = [
+    4.91586e-20, 4.91586e-20, 4.91586e-20, 1.04801e-05,
+    1.35216e-05, 0.0205425, 0.0256526, 0.000214329,
+];
+pub const OGTRANSB0_LANDSAT: [f64; NSRL_BANDS] = [
+    0.000197019, 0.000197019, 0.000197019, 0.640215,
+    -0.195998, 0.326577, 0.243961, 0.396322,
+];
+pub const OGTRANSB1_LANDSAT: [f64; NSRL_BANDS] = [
+    9.57011e-16, 9.57011e-16, 9.57011e-16, -0.348785,
+    0.275239, 0.0117192, 0.0616101, 0.04728,
+];
+
 // LUT angle parameters
 pub const XTS_MIN: f64 = 0.0;
 pub const XTS_STEP: f64 = 4.0;
