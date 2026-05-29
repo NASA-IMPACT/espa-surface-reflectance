@@ -1,5 +1,6 @@
 """Top-level scene processing pipeline."""
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -11,36 +12,69 @@ from lasrc.sensors import SENSORS
 import lasrc as _lasrc
 
 
+@dataclass
+class AuxFilePaths:
+    """Paths to all auxiliary input files required for surface reflectance."""
+
+    # LUT files (HDF5)
+    angle_hdf: str | Path
+    intref_hdf: str | Path
+    transm_hdf: str | Path
+    sphera_hdf: str | Path
+
+    # Atmospheric grids
+    wv_oz_hdf: str | Path
+    dem_hdf: str | Path
+    ratio_hdf: str | Path
+
+    # Data source for water vapor / ozone
+    aux_source: str = "VIIRS"
+
+
 def process_scene(
     input_path: str | Path,
-    aux_dir: str | Path,
+    aux_files: AuxFilePaths,
     output_path: str | Path,
     sensor_name: str = "LANDSAT_8",
     output_format: str = "cog",
     use_orig_aero: bool = False,
-    aux_source: str = "VIIRS",
 ) -> None:
-    """Process a scene from TOA to surface reflectance."""
+    """Process a scene from TOA to surface reflectance.
+
+    Parameters
+    ----------
+    input_path : path
+        Landsat scene directory or file.
+    aux_files : AuxFilePaths
+        Resolved paths to all auxiliary data files.
+    output_path : path
+        Output file or directory.
+    sensor_name : str
+        One of LANDSAT_8, LANDSAT_9, SENTINEL_2A, SENTINEL_2B, SENTINEL_2C.
+    output_format : str
+        "cog" or "espa".
+    use_orig_aero : bool
+        Use original aerosol algorithm (not yet implemented).
+    """
     sensor_config = SENSORS[sensor_name]
-    aux_dir = Path(aux_dir)
 
     scene = read_landsat_scene(input_path)
 
     lut_data = load_lut_from_hdf(
-        str(aux_dir / "ANGLE_NEW.hdf"),
-        str(aux_dir / "RES_LUT_V3.0-LANDSAT.hdf"),
-        str(aux_dir / "TRANS_LUT_V3.0-LANDSAT.hdf"),
-        str(aux_dir / "AERO_LUT_V3.0-LANDSAT.hdf"),
+        str(aux_files.angle_hdf),
+        str(aux_files.intref_hdf),
+        str(aux_files.transm_hdf),
+        str(aux_files.sphera_hdf),
         nsr_bands=sensor_config["nsr_bands"],
     )
     lut = _lasrc.PyLookupTables(**lut_data)
 
     aux_data = load_auxiliary_data(
-        str(aux_dir / "VIIRS_CMG_DAILY.hdf"),
-        aux_source=aux_source,
+        str(aux_files.wv_oz_hdf),
+        aux_source=aux_files.aux_source,
     )
-    dem = load_dem(str(aux_dir / "CMGDEM.hdf"))
-    ratios = load_ratio_file(str(aux_dir / "ratiomapndwiexp.hdf"))
+    dem = load_dem(str(aux_files.dem_hdf))
+    ratios = load_ratio_file(str(aux_files.ratio_hdf))
     aux = _lasrc.PyAuxiliaryData(dem=dem, **aux_data, **ratios)
 
     profile = scene["profile"]
