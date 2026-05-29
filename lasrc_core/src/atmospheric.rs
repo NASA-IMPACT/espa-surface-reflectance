@@ -70,9 +70,14 @@ pub fn atmcorlamb2_new(
 ) -> f64 {
     let lambda_sf = 1.0 / 0.55;
 
-    // Scale AOT to this band's wavelength using the Angstrom relation
-    let mut mraot550nm =
-        (raot550nm / normext_ib_0_3) * (lambda[iband] * lambda_sf).powf(-eps);
+    // Scale AOT to this band's wavelength using the Angstrom relation.
+    // For bands beyond the lambda table (e.g. Landsat band 9) or negative eps,
+    // skip the wavelength scaling and use raw AOT (matches C code behavior).
+    let mut mraot550nm = if eps < 0.0 || iband >= lambda.len() {
+        raot550nm
+    } else {
+        (raot550nm / normext_ib_0_3) * (lambda[iband] * lambda_sf).powf(-eps)
+    };
 
     // Clamp to the valid range of the fitted polynomials
     if mraot550nm >= coeff.roatm_upper {

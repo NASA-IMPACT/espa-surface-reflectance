@@ -26,3 +26,6 @@ lasrc_core/target/
 lasrc_py/target/
 Cargo.lock
 
+# Test data (Landsat scenes, auxiliary files)
+test_data/
+
