@@ -52,21 +52,57 @@ pub struct SurfaceReflectanceResult {
     pub qa: Array2<u8>,
 }
 
-/// Map a latitude/longitude to CMG grid indices.
+/// CMG grid position with four surrounding cell indices and bilinear weights.
+struct CmgPosition {
+    /// Flat indices of the four surrounding cells: [row][col], [row][col+1],
+    /// [row+1][col], [row+1][col+1].
+    idx: [usize; 4],
+    /// Bilinear weights for the four cells (sum to 1.0).
+    w: [f64; 4],
+}
+
+/// Map a latitude/longitude to a CMG grid position with bilinear weights.
 ///
 /// The CMG grid covers -90..90 lat and -180..180 lon at 0.05-degree resolution.
-/// Returns (row, col) clamped to valid ranges.
-fn latlon_to_cmg(lat: f64, lon: f64) -> (usize, usize) {
-    // Row 0 is at +90, row 3599 is at -90 (north-to-south)
-    // Use truncation (as isize) to match C code's (int) cast behavior
-    let row = ((90.0 - lat) / 0.05) as isize;
-    let row = row.clamp(0, (CMG_NBLAT - 1) as isize) as usize;
+/// Uses cell-center coordinates (89.975, 179.975) to match the C code.
+fn latlon_to_cmg(lat: f64, lon: f64) -> CmgPosition {
+    // Fractional grid coordinates (cell-center aligned, matching C code)
+    let ycmg = (89.975 - lat) * 20.0;
+    let xcmg = (179.975 + lon) * 20.0;
 
-    // Col 0 is at -180, col 7199 is at +180 (west-to-east)
-    let col = ((lon + 180.0) / 0.05) as isize;
-    let col = col.clamp(0, (CMG_NBLON - 1) as isize) as usize;
+    // Integer grid indices (truncation matches C code's (int) cast)
+    let row = (ycmg as isize).clamp(0, (CMG_NBLAT - 1) as isize) as usize;
+    let col = (xcmg as isize).clamp(0, (CMG_NBLON - 1) as isize) as usize;
 
-    (row, col)
+    // Next row/col with wrapping at edges (matching C code)
+    let row1 = if row >= CMG_NBLAT - 1 { 0 } else { row + 1 };
+    let col1 = if col >= CMG_NBLON - 1 { 0 } else { col + 1 };
+
+    // Fractional offsets for bilinear interpolation
+    let u = ycmg - row as f64;
+    let v = xcmg - col as f64;
+    let u = u.clamp(0.0, 1.0);
+    let v = v.clamp(0.0, 1.0);
+
+    CmgPosition {
+        idx: [
+            row * CMG_NBLON + col,
+            row * CMG_NBLON + col1,
+            row1 * CMG_NBLON + col,
+            row1 * CMG_NBLON + col1,
+        ],
+        w: [
+            (1.0 - u) * (1.0 - v),
+            (1.0 - u) * v,
+            u * (1.0 - v),
+            u * v,
+        ],
+    }
+}
+
+/// Bilinear interpolation over 4 values with the given weights.
+fn bilerp(vals: [f64; 4], w: &[f64; 4]) -> f64 {
+    vals[0] * w[0] + vals[1] * w[1] + vals[2] * w[2] + vals[3] * w[3]
 }
 
 /// Compute surface pressure from DEM elevation using the barometric formula.
@@ -74,98 +110,106 @@ fn pressure_from_elevation(elevation_m: f64) -> f64 {
     ATMOS_PRES_0 * (-elevation_m * ONE_DIV_8500).exp()
 }
 
-/// Extract atmospheric parameters (pressure, ozone, water vapor) at a given lat/lon.
+/// Extract atmospheric parameters (pressure, ozone, water vapor) at a given lat/lon
+/// using bilinear interpolation over the 4 surrounding CMG grid cells.
 fn extract_atm_params(aux: &AuxiliaryData, lat: f64, lon: f64) -> (f64, f64, f64) {
-    let (row, col) = latlon_to_cmg(lat, lon);
-    let cmg_idx = row * CMG_NBLON + col;
-    let dem_idx = row * DEM_NBLON + col;
+    let cmg = latlon_to_cmg(lat, lon);
 
-    // DEM elevation -> pressure
-    let elevation = if dem_idx < aux.dem.len() {
-        aux.dem[dem_idx] as f64
-    } else {
-        0.0
-    };
-    let pressure = pressure_from_elevation(elevation);
+    // DEM -> pressure: convert each corner's elevation to pressure, then interpolate.
+    // Fill value (-9999) defaults to sea-level pressure.
+    let pres_vals: [f64; 4] = std::array::from_fn(|i| {
+        let idx = cmg.idx[i];
+        if idx < aux.dem.len() && aux.dem[idx] != -9999 {
+            pressure_from_elevation(aux.dem[idx] as f64)
+        } else {
+            ATMOS_PRES_0
+        }
+    });
+    let pressure = bilerp(pres_vals, &cmg.w);
 
-    // Water vapor (raw DN divided by scale factor to get physical units)
-    let uwv = if cmg_idx < aux.wv.len() && aux.wv[cmg_idx] > 0 {
-        aux.wv[cmg_idx] as f64 / aux.wv_scale
-    } else {
-        aux.wv_default
-    };
+    // Water vapor: fill/zero values replaced with default DN before interpolation,
+    // then unscaled after.
+    let wv_vals: [f64; 4] = std::array::from_fn(|i| {
+        let idx = cmg.idx[i];
+        if idx < aux.wv.len() && aux.wv[idx] > 0 {
+            aux.wv[idx] as f64
+        } else {
+            aux.wv_default * aux.wv_scale // default in DN space
+        }
+    });
+    let uwv = bilerp(wv_vals, &cmg.w) / aux.wv_scale;
 
-    // Ozone (raw DN divided by scale factor to get physical units)
-    let uoz = if cmg_idx < aux.oz.len() && aux.oz[cmg_idx] > 0 {
-        aux.oz[cmg_idx] as f64 / aux.oz_scale
-    } else {
-        aux.oz_default
-    };
+    // Ozone: same fill handling as water vapor.
+    let oz_vals: [f64; 4] = std::array::from_fn(|i| {
+        let idx = cmg.idx[i];
+        if idx < aux.oz.len() && aux.oz[idx] > 0 {
+            aux.oz[idx] as f64
+        } else {
+            aux.oz_default * aux.oz_scale
+        }
+    });
+    let uoz = bilerp(oz_vals, &cmg.w) / aux.oz_scale;
 
     (pressure, uoz, uwv)
 }
 
-/// Look up band ratios from auxiliary data at a CMG grid position.
+/// Look up a single band ratio at one CMG cell, falling back to slope/intercept.
+fn ratio_at_cell(
+    ratio: &[i16],
+    intratio: &[i16],
+    slpratio: &[i16],
+    idx: usize,
+    lat: f64,
+) -> f64 {
+    if idx < ratio.len() && ratio[idx] > 0 {
+        ratio[idx] as f64 / 1000.0
+    } else if idx < intratio.len() {
+        let intr = intratio[idx] as f64 / 1000.0;
+        let slp = if idx < slpratio.len() {
+            slpratio[idx] as f64 / 1000.0
+        } else {
+            0.0
+        };
+        intr + slp * lat
+    } else {
+        0.5
+    }
+}
+
+/// Look up band ratios from auxiliary data using bilinear interpolation.
 ///
-/// Returns (rb1, rb2, rb7) as floats (scaled from integer by 1/1000).
+/// Returns (rb1, rb2, rb7) as floats.
 fn lookup_band_ratios(
     aux: &AuxiliaryData,
     lat: f64,
     lon: f64,
 ) -> (f64, f64, f64) {
-    let (row, col) = latlon_to_cmg(lat, lon);
-    let idx = row * RATIO_NBLON + col;
+    let cmg = latlon_to_cmg(lat, lon);
 
-    let rb1 = if idx < aux.ratiob1.len() && aux.ratiob1[idx] > 0 {
-        aux.ratiob1[idx] as f64 / 1000.0
-    } else if idx < aux.intratiob1.len() {
-        // Use interpolated/slope values as fallback
-        let intr = aux.intratiob1[idx] as f64 / 1000.0;
-        let slp = if idx < aux.slpratiob1.len() {
-            aux.slpratiob1[idx] as f64 / 1000.0
-        } else {
-            0.0
-        };
-        intr + slp * lat
-    } else {
-        0.5 // Default ratio
-    };
+    let rb1_vals: [f64; 4] = std::array::from_fn(|i| {
+        ratio_at_cell(&aux.ratiob1, &aux.intratiob1, &aux.slpratiob1, cmg.idx[i], lat)
+    });
+    let rb2_vals: [f64; 4] = std::array::from_fn(|i| {
+        ratio_at_cell(&aux.ratiob2, &aux.intratiob2, &aux.slpratiob2, cmg.idx[i], lat)
+    });
+    let rb7_vals: [f64; 4] = std::array::from_fn(|i| {
+        ratio_at_cell(&aux.ratiob7, &aux.intratiob7, &aux.slpratiob7, cmg.idx[i], lat)
+    });
 
-    let rb2 = if idx < aux.ratiob2.len() && aux.ratiob2[idx] > 0 {
-        aux.ratiob2[idx] as f64 / 1000.0
-    } else if idx < aux.intratiob2.len() {
-        let intr = aux.intratiob2[idx] as f64 / 1000.0;
-        let slp = if idx < aux.slpratiob2.len() {
-            aux.slpratiob2[idx] as f64 / 1000.0
-        } else {
-            0.0
-        };
-        intr + slp * lat
-    } else {
-        0.5
-    };
-
-    let rb7 = if idx < aux.ratiob7.len() && aux.ratiob7[idx] > 0 {
-        aux.ratiob7[idx] as f64 / 1000.0
-    } else if idx < aux.intratiob7.len() {
-        let intr = aux.intratiob7[idx] as f64 / 1000.0;
-        let slp = if idx < aux.slpratiob7.len() {
-            aux.slpratiob7[idx] as f64 / 1000.0
-        } else {
-            0.0
-        };
-        intr + slp * lat
-    } else {
-        0.5
-    };
-
-    (rb1, rb2, rb7)
+    (
+        bilerp(rb1_vals, &cmg.w),
+        bilerp(rb2_vals, &cmg.w),
+        bilerp(rb7_vals, &cmg.w),
+    )
 }
 
 /// Check if a pixel is water based on auxiliary andwi/sndwi grids.
+///
+/// Uses the primary (top-left) CMG cell for the discrete water/land decision,
+/// matching the C code's use of ratio_pix11 for the NDWI threshold check.
 fn is_water_pixel(aux: &AuxiliaryData, lat: f64, lon: f64) -> bool {
-    let (row, col) = latlon_to_cmg(lat, lon);
-    let idx = row * RATIO_NBLON + col;
+    let cmg = latlon_to_cmg(lat, lon);
+    let idx = cmg.idx[0]; // primary cell
 
     let andwi_val = if idx < aux.andwi.len() { aux.andwi[idx] } else { 0 };
     let sndwi_val = if idx < aux.sndwi.len() { aux.sndwi[idx] } else { 0 };
@@ -646,24 +690,53 @@ mod tests {
 
     #[test]
     fn test_latlon_to_cmg_equator_prime_meridian() {
-        let (row, col) = latlon_to_cmg(0.0, 0.0);
-        // 0 lat -> row = (90 - 0) / 0.05 = 1800
-        assert_eq!(row, 1800);
-        // 0 lon -> col = (0 + 180) / 0.05 = 3600
-        assert_eq!(col, 3600);
+        let cmg = latlon_to_cmg(0.0, 0.0);
+        // Primary cell (idx[0]) should be near row=1799, col=3599
+        // (89.975 - 0) * 20 = 1799.5 -> row 1799
+        // (179.975 + 0) * 20 = 3599.5 -> col 3599
+        let row = cmg.idx[0] / CMG_NBLON;
+        let col = cmg.idx[0] % CMG_NBLON;
+        assert_eq!(row, 1799);
+        assert_eq!(col, 3599);
+        // Weights should sum to 1.0
+        let wsum: f64 = cmg.w.iter().sum();
+        assert!((wsum - 1.0).abs() < 1e-10);
+        // Fractional position ~0.5 in both directions
+        assert!(cmg.w[0] > 0.2 && cmg.w[0] < 0.3); // ~0.25
     }
 
     #[test]
     fn test_latlon_to_cmg_corners() {
-        // Top-left: 90N, 180W
-        let (row, col) = latlon_to_cmg(90.0, -180.0);
+        // Top-left: 90N, 180W -> row 0, col 0, no fractional offset
+        let cmg = latlon_to_cmg(90.0, -180.0);
+        let row = cmg.idx[0] / CMG_NBLON;
+        let col = cmg.idx[0] % CMG_NBLON;
         assert_eq!(row, 0);
         assert_eq!(col, 0);
+        // At the corner, almost all weight should be on idx[0]
+        assert!(cmg.w[0] > 0.9);
 
-        // Bottom-right: 90S, 180E (clamped)
-        let (row, col) = latlon_to_cmg(-90.0, 180.0);
-        assert_eq!(row, CMG_NBLAT - 1);
-        assert_eq!(col, CMG_NBLON - 1);
+        // Bottom-right: 90S, 180E (clamped to grid)
+        let cmg = latlon_to_cmg(-90.0, 180.0);
+        let row = cmg.idx[0] / CMG_NBLON;
+        assert!(row >= CMG_NBLAT - 2);
+    }
+
+    #[test]
+    fn test_bilerp_uniform() {
+        // All same value -> interpolation returns that value
+        let w = [0.25, 0.25, 0.25, 0.25];
+        assert!((bilerp([5.0, 5.0, 5.0, 5.0], &w) - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_bilerp_weights() {
+        // All weight on first cell
+        let w = [1.0, 0.0, 0.0, 0.0];
+        assert!((bilerp([10.0, 20.0, 30.0, 40.0], &w) - 10.0).abs() < 1e-10);
+        // All weight on last cell
+        let w = [0.0, 0.0, 0.0, 1.0];
+        assert!((bilerp([10.0, 20.0, 30.0, 40.0], &w) - 40.0).abs() < 1e-10);
     }
 
     #[test]
