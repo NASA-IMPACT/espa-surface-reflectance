@@ -91,22 +91,29 @@ pub fn quick_select(arr: &mut [f32]) -> f32 {
 /// where x[i][j] = aot[i]^(3-j) for j=0..3, then solves with LU decomposition
 /// and partial pivoting.
 ///
+/// Uses f32 arithmetic internally to match the C implementation (which uses
+/// `float` throughout `poly_coeff.c`), then casts back to f64 for the return.
+///
 /// Returns `[a3, a2, a1, a0]` for the polynomial `a3*x^3 + a2*x^2 + a1*x + a0`.
 pub fn get_3rd_order_poly_coeff(aot: &[f64], atm: &[f64]) -> [f64; NCOEF] {
     let n_atm = aot.len().min(atm.len());
 
+    // Cast inputs to f32 to match C's float arithmetic
+    let aot_f32: Vec<f32> = aot[..n_atm].iter().map(|&v| v as f32).collect();
+    let atm_f32: Vec<f32> = atm[..n_atm].iter().map(|&v| v as f32).collect();
+
     // Build design matrix x[i][j] = aot[i]^(3-j)
-    let mut x = vec![[0.0f64; NCOEF]; n_atm];
+    let mut x = vec![[0.0f32; NCOEF]; n_atm];
     for i in 0..n_atm {
-        x[i][0] = aot[i] * aot[i] * aot[i];
-        x[i][1] = aot[i] * aot[i];
-        x[i][2] = aot[i];
+        x[i][0] = aot_f32[i] * aot_f32[i] * aot_f32[i];
+        x[i][1] = aot_f32[i] * aot_f32[i];
+        x[i][2] = aot_f32[i];
         x[i][3] = 1.0;
     }
 
     // Build normal equations: z = X'X (NCOEF x NCOEF), y1 = X'y (NCOEF)
-    let mut z = [[0.0f64; NCOEF]; NCOEF];
-    let mut y1 = [0.0f64; NCOEF];
+    let mut z = [[0.0f32; NCOEF]; NCOEF];
+    let mut y1 = [0.0f32; NCOEF];
 
     for i in 0..NCOEF {
         for j in 0..NCOEF {
@@ -115,26 +122,29 @@ pub fn get_3rd_order_poly_coeff(aot: &[f64], atm: &[f64]) -> [f64; NCOEF] {
             }
         }
         for j in 0..n_atm {
-            y1[i] += x[j][i] * atm[j];
+            y1[i] += x[j][i] * atm_f32[j];
         }
     }
 
     // LU decompose with partial pivoting
     let mut perm = [0usize; NCOEF];
-    lup_decompose(&mut z, &mut perm, 1e-10);
+    lup_decompose_f32(&mut z, &mut perm, 1e-10);
 
     // Solve for coefficients
-    let mut coeff = [0.0f64; NCOEF];
-    lup_solve(&z, &perm, &y1, &mut coeff);
+    let mut coeff_f32 = [0.0f32; NCOEF];
+    lup_solve_f32(&z, &perm, &y1, &mut coeff_f32);
 
-    coeff
+    // Cast back to f64 for the return type
+    [
+        coeff_f32[0] as f64,
+        coeff_f32[1] as f64,
+        coeff_f32[2] as f64,
+        coeff_f32[3] as f64,
+    ]
 }
 
-/// LU decomposition with partial pivoting (in-place).
-///
-/// On return, `a` contains both L (below diagonal) and U (upper triangle).
-/// `perm` stores the row permutation.
-fn lup_decompose(a: &mut [[f64; NCOEF]; NCOEF], perm: &mut [usize; NCOEF], tol: f64) {
+/// LU decomposition with partial pivoting (f32, matching C's float).
+fn lup_decompose_f32(a: &mut [[f32; NCOEF]; NCOEF], perm: &mut [usize; NCOEF], tol: f32) {
     let n = NCOEF;
 
     for i in 0..n {
@@ -142,8 +152,7 @@ fn lup_decompose(a: &mut [[f64; NCOEF]; NCOEF], perm: &mut [usize; NCOEF], tol: 
     }
 
     for i in 0..n {
-        // Find pivot
-        let mut max_a = 0.0f64;
+        let mut max_a = 0.0f32;
         let mut imax = i;
         for k in i..n {
             let abs_a = a[k][i].abs();
@@ -154,7 +163,6 @@ fn lup_decompose(a: &mut [[f64; NCOEF]; NCOEF], perm: &mut [usize; NCOEF], tol: 
         }
 
         if max_a < tol {
-            // Near-degenerate matrix; proceed anyway (may produce garbage coefficients)
             continue;
         }
 
@@ -172,16 +180,15 @@ fn lup_decompose(a: &mut [[f64; NCOEF]; NCOEF], perm: &mut [usize; NCOEF], tol: 
     }
 }
 
-/// Forward/back substitution to solve A*x = b, where A is the LU-decomposed matrix.
-fn lup_solve(
-    a: &[[f64; NCOEF]; NCOEF],
+/// Forward/back substitution (f32 version, matching C's float).
+fn lup_solve_f32(
+    a: &[[f32; NCOEF]; NCOEF],
     perm: &[usize; NCOEF],
-    b: &[f64; NCOEF],
-    x: &mut [f64; NCOEF],
+    b: &[f32; NCOEF],
+    x: &mut [f32; NCOEF],
 ) {
     let n = NCOEF;
 
-    // Forward substitution
     for i in 0..n {
         x[i] = b[perm[i]];
         for j in 0..i {
@@ -189,7 +196,6 @@ fn lup_solve(
         }
     }
 
-    // Back substitution
     for i in (0..n).rev() {
         for j in i + 1..n {
             x[i] -= a[i][j] * x[j];
@@ -240,10 +246,12 @@ mod tests {
         let aot: Vec<f64> = (0..10).map(|i| i as f64 * 0.5).collect();
         let atm: Vec<f64> = aot.iter().map(|&x| 2.0 * x + 1.0).collect();
         let coeff = get_3rd_order_poly_coeff(&aot, &atm);
-        assert!(coeff[0].abs() < 1e-6, "a3 should be ~0: {}", coeff[0]);
-        assert!(coeff[1].abs() < 1e-6, "a2 should be ~0: {}", coeff[1]);
-        assert!((coeff[2] - 2.0).abs() < 1e-6, "a1 should be ~2: {}", coeff[2]);
-        assert!((coeff[3] - 1.0).abs() < 1e-6, "a0 should be ~1: {}", coeff[3]);
+        // Tolerances relaxed to 1e-4 because polynomial fitting now uses f32
+        // arithmetic (matching C's float precision).
+        assert!(coeff[0].abs() < 1e-4, "a3 should be ~0: {}", coeff[0]);
+        assert!(coeff[1].abs() < 1e-4, "a2 should be ~0: {}", coeff[1]);
+        assert!((coeff[2] - 2.0).abs() < 1e-4, "a1 should be ~2: {}", coeff[2]);
+        assert!((coeff[3] - 1.0).abs() < 1e-4, "a0 should be ~1: {}", coeff[3]);
     }
 
     #[test]

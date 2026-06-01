@@ -36,10 +36,20 @@ pub struct AtmCorrCoefficients {
     pub satm_coef: [f64; NCOEF],
 }
 
-/// Evaluate a cubic polynomial: c[0]*x^3 + c[1]*x^2 + c[2]*x + c[3].
+/// Evaluate a cubic polynomial using f32 arithmetic to match C's float precision.
+///
+/// C computes: `coef[3] + coef[2]*x + coef[1]*x^2 + coef[0]*x^3` using `float`.
+/// We cast to f32 for the evaluation, then return as f64.
 #[inline]
 fn eval_cubic(c: &[f64; NCOEF], x: f64) -> f64 {
-    ((c[0] * x + c[1]) * x + c[2]) * x + c[3]
+    let xf = x as f32;
+    let xf_sq = xf * xf;
+    let xf_cube = xf_sq * xf;
+    let result = c[3] as f32
+        + c[2] as f32 * xf
+        + c[1] as f32 * xf_sq
+        + c[0] as f32 * xf_cube;
+    result as f64
 }
 
 /// Fast polynomial atmospheric correction (pre-fitted coefficients path).
@@ -68,30 +78,33 @@ pub fn atmcorlamb2_new(
     lambda: &[f64],
     eps: f64,
 ) -> f64 {
-    let lambda_sf = 1.0 / 0.55;
+    // C uses float throughout atmcorlamb2_new; match that precision.
+    let lambda_sf: f32 = 1.0 / 0.55;
 
-    // Scale AOT to this band's wavelength using the Angstrom relation.
-    // For bands beyond the lambda table (e.g. Landsat band 9) or negative eps,
-    // skip the wavelength scaling and use raw AOT (matches C code behavior).
-    let mut mraot550nm = if eps < 0.0 || iband >= lambda.len() {
-        raot550nm
+    let mut mraot550nm: f32 = if eps < 0.0 || iband >= lambda.len() {
+        raot550nm as f32
     } else {
-        (raot550nm / normext_ib_0_3) * (lambda[iband] * lambda_sf).powf(-eps)
+        (raot550nm as f32 / normext_ib_0_3 as f32)
+            * (lambda[iband] as f32 * lambda_sf).powf(-(eps as f32))
     };
 
-    // Clamp to the valid range of the fitted polynomials
-    if mraot550nm >= coeff.roatm_upper {
-        mraot550nm = coeff.roatm_upper;
+    if mraot550nm >= coeff.roatm_upper as f32 {
+        mraot550nm = coeff.roatm_upper as f32;
     }
 
-    // Evaluate cubic polynomials
-    let roatm = eval_cubic(&coeff.roatm_coef, mraot550nm);
-    let ttatmg = eval_cubic(&coeff.ttatmg_coef, mraot550nm);
-    let satm = eval_cubic(&coeff.satm_coef, mraot550nm);
+    // Evaluate cubic polynomials (eval_cubic already uses f32 internally)
+    let roatm = eval_cubic(&coeff.roatm_coef, mraot550nm as f64);
+    let ttatmg = eval_cubic(&coeff.ttatmg_coef, mraot550nm as f64);
+    let satm = eval_cubic(&coeff.satm_coef, mraot550nm as f64);
 
-    // Solve for surface reflectance
-    let xroslamb = rotoa / tgo - roatm;
-    xroslamb / (ttatmg + satm * xroslamb)
+    // Atmospheric correction — must match C's formula exactly:
+    //   *roslamb = rotoa - tgo*roatm;
+    //   *roslamb /= tgo*ttatmg + satm*(*roslamb);
+    // Note: C's atmcorlamb2_new uses a DIFFERENT formula from atmcorlamb2.
+    // The fast path multiplies by tgo instead of dividing.
+    let roslamb_f = rotoa as f32 - (tgo as f32) * (roatm as f32);
+    let result = roslamb_f / ((tgo as f32) * (ttatmg as f32) + (satm as f32) * roslamb_f);
+    result as f64
 }
 
 /// Full LUT-based atmospheric correction.

@@ -249,7 +249,7 @@ fn precompute_coefficients(
                 0.0, // rotoa placeholder
                 lambda,
                 max_band_idx,
-                DEFAULT_EPS,
+                HIGH_EPS, // C uses eps=2.5 for precomputation
             );
             roatm_vals[iaot] = result.roatm;
             ttatmg_vals[iaot] = result.ttatmg;
