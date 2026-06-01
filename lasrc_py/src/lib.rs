@@ -28,6 +28,7 @@ impl PyLookupTables {
         nbfi: Vec<i32>,
         ttv: Vec<f64>,
         tts: Vec<f64>,
+        indts: Vec<i32>,
         nsr_bands: usize,
     ) -> PyResult<Self> {
         if tts.len() != NSOLAR_ZEN_VALS {
@@ -51,6 +52,7 @@ impl PyLookupTables {
                 nbfi,
                 ttv,
                 tts: tts_arr,
+                indts,
                 nsr_bands,
             },
         })
@@ -138,7 +140,7 @@ impl PyAuxiliaryData {
 /// Returns
 /// -------
 /// dict with keys:
-///   "sr_bands"  – list of 1-D int16 arrays (flattened), one per reflectance band
+///   "sr_bands"  – list of 1-D uint16 arrays (flattened), one per reflectance band
 ///   "bt_bands"  – list of 1-D uint16 arrays (flattened), one per thermal band
 ///   "aerosol"   – 1-D int16 array (flattened)
 ///   "qa"        – 1-D uint8 array (flattened)
@@ -206,8 +208,8 @@ fn process_surface_reflectance<'py>(
     // Array2<T> implements IntoPyArray directly, so no intermediate Vec needed.
     let dict = pyo3::types::PyDict::new(py);
 
-    // SR bands: Vec<Array2<i16>> -> list of 1-D PyArray<i16>
-    let sr_list: Vec<Bound<'py, PyArray1<i16>>> = result
+    // SR bands: Vec<Array2<u16>> -> list of 1-D PyArray<u16>
+    let sr_list: Vec<Bound<'py, PyArray1<u16>>> = result
         .sr_bands
         .into_iter()
         .map(|a| {

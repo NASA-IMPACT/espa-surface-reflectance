@@ -1,5 +1,6 @@
 """Run LaSRC surface reflectance on the test Landsat 9 granule."""
 
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -11,11 +12,10 @@ TEST_DATA = Path(__file__).resolve().parent.parent / "test_data"
 SCENE_DIR = TEST_DATA / "LC09_L1TP_001066_20260314_20260314_02_T1"
 AUX_DIR = TEST_DATA / "aux_data"
 LUT_DIR = AUX_DIR / "LDCMLUT"
-OUTPUT_PATH = TEST_DATA / "output_sr.tif"
 
-# Scene date: 2026-03-14 -> month 03
-WV_IMG = AUX_DIR / "monthly_avgs" / "2026" / "monthly_avg_wv_2026_03.img"
-OZ_IMG = AUX_DIR / "monthly_avgs" / "2026" / "monthly_avg_oz_2026_03.img"
+# Scene date: 2026-03-14 -> DOY 073
+# VIIRS aux file: $LASRC_AUX_DIR/LADS/<year>/V*04ANC.A<year><doy>.*.h5
+LADS_DIR = AUX_DIR / "LADS" / "2026"
 
 
 # ── LUT loading ───────────────────────────────────────────────────────────────
@@ -29,8 +29,9 @@ def load_angle_lut(path: Path) -> dict:
     for name in ["TSMAX", "TSMIN", "NBFIC", "TTV", "TTS"]:
         ds = hdf.select(name)
         result[name.lower()] = ds.get().astype(np.float64).ravel().tolist()
-    # NBFI is integer
+    # NBFI and INDTS are integer
     result["nbfi"] = hdf.select("NBFI").get().astype(np.int32).ravel().tolist()
+    result["indts"] = hdf.select("INDTS").get().astype(np.int32).ravel().tolist()
     hdf.end()
     return result
 
@@ -136,18 +137,25 @@ def load_trans_ascii(path: Path, nsr_bands: int) -> list:
 
 # ── Auxiliary data loading ─────────────────────────────────────────────────────
 
-def load_monthly_wv_oz(wv_path: Path, oz_path: Path) -> dict:
-    """Load monthly average water vapor and ozone from ENVI binary files.
+def load_viirs_wv_oz(path: Path) -> dict:
+    """Load water vapor and ozone from daily VIIRS CMG HDF5 file.
 
-    WV: uint16, 3600×7200, scale=200 (divide to get cm)
-    OZ: uint8, 3600×7200, scale=400 (divide to get DU... but stored as uint8)
+    Datasets:
+      /HDFEOS/GRIDS/VIIRS_CMG/Data Fields/Coarse Resolution Water Vapor (uint16, 3600×7200)
+      /HDFEOS/GRIDS/VIIRS_CMG/Data Fields/Coarse Resolution Ozone (uint8, 3600×7200)
+
+    Scale factors (VIIRS): WV / 200 -> g/cm², OZ / 400 -> cm-atm
     """
-    wv = np.fromfile(wv_path, dtype=np.uint16).reshape(3600, 7200).astype(np.int16)
-    oz = np.fromfile(oz_path, dtype=np.uint8).reshape(3600, 7200).astype(np.int16)
+    import h5py
+
+    base = "/HDFEOS/GRIDS/VIIRS_CMG/Data Fields/"
+    with h5py.File(str(path), "r") as f:
+        wv = np.array(f[base + "Coarse Resolution Water Vapor"], dtype=np.int16).ravel()
+        oz = np.array(f[base + "Coarse Resolution Ozone"], dtype=np.int16).ravel()
 
     return {
-        "wv": wv.ravel().tolist(),
-        "oz": oz.ravel().tolist(),
+        "wv": wv.tolist(),
+        "oz": oz.tolist(),
         "wv_scale": 200.0,
         "oz_scale": 400.0,
         "wv_default": 2.5,
@@ -290,11 +298,40 @@ def find_band_file(band_files, band_id):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+BAND_NAMES = ["sr_band1", "sr_band2", "sr_band3", "sr_band4",
+               "sr_band5", "sr_band6", "sr_band7", "sr_band9"]
+
+
+def find_viirs_aux(lads_dir: Path, year: str, doy: str) -> Path:
+    """Find the VIIRS auxiliary file matching V*04ANC.A<year><doy>.*.h5."""
+    import glob as globmod
+    pattern = str(lads_dir / f"V*04ANC.A{year}{doy}.*.h5")
+    matches = sorted(globmod.glob(pattern))
+    if not matches:
+        raise FileNotFoundError(
+            f"No VIIRS aux file found matching {pattern}. "
+            f"Use --aux to specify the path explicitly."
+        )
+    return Path(matches[0])
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Run LaSRC on test Landsat 9 granule")
+    parser.add_argument(
+        "--format", choices=["cog", "espa"], default="cog",
+        help="Output format: 'cog' for GeoTIFF (default), 'espa' for flat binary .img files",
+    )
+    parser.add_argument(
+        "--aux", type=Path, default=None,
+        help="Path to VIIRS auxiliary HDF5 file (auto-detected from LADS dir if omitted)",
+    )
+    args = parser.parse_args()
+
     import lasrc as _lasrc
 
     nsr_bands = 8
     print(f"LaSRC version: {_lasrc.__version__}")
+    print(f"Output format: {args.format}")
 
     # Load LUTs
     print("Loading LUTs...")
@@ -316,13 +353,19 @@ def main():
         nbfi=angle_data["nbfi"],
         ttv=angle_data["ttv"],
         tts=angle_data["tts"],
+        indts=angle_data["indts"],
         nsr_bands=nsr_bands,
     )
 
     # Load auxiliary data
     print("Loading auxiliary data...")
     t0 = time.time()
-    wv_oz = load_monthly_wv_oz(WV_IMG, OZ_IMG)
+    if args.aux is not None:
+        viirs_path = args.aux
+    else:
+        viirs_path = find_viirs_aux(LADS_DIR, "2026", "073")
+    print(f"  VIIRS aux file: {viirs_path.name}")
+    wv_oz = load_viirs_wv_oz(viirs_path)
     dem = load_dem(AUX_DIR / "CMGDEM.hdf")
     ratios = load_ratios(AUX_DIR / "ratiomapndwiexp.hdf")
     print(f"  Aux data loaded in {time.time() - t0:.1f}s")
@@ -385,28 +428,41 @@ def main():
     print(f"  Aerosol stats: min={aerosol.min()}, max={aerosol.max()}, "
           f"mean={aerosol.mean():.1f}")
 
-    # Write COG output
-    nbands = len(sr_bands)
-    cog_profile = profile.copy()
-    cog_profile.update(
-        driver="GTiff",
-        dtype="int16",
-        count=nbands + 2,
-        compress="deflate",
-        tiled=True,
-        blockxsize=512,
-        blockysize=512,
-    )
-
-    print(f"Writing output to {OUTPUT_PATH}...")
-    with rasterio.open(OUTPUT_PATH, "w", **cog_profile) as dst:
+    if args.format == "espa":
+        # Write ESPA internal format: one flat binary .img file per band
+        output_dir = TEST_DATA / "output_espa"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Writing ESPA output to {output_dir}/...")
         for i, band in enumerate(sr_bands):
-            dst.write(band.astype(np.int16), i + 1)
-            dst.set_band_description(i + 1, f"sr_band{i + 1}")
-        dst.write(aerosol.astype(np.int16), nbands + 1)
-        dst.set_band_description(nbands + 1, "sr_aerosol")
-        dst.write(qa.astype(np.uint8), nbands + 2)
-        dst.set_band_description(nbands + 2, "sr_aerosol_qa")
+            out_file = output_dir / f"{BAND_NAMES[i]}.img"
+            band.astype(np.uint16).tofile(out_file)
+            print(f"  {out_file.name}: {band.shape}")
+        aerosol.astype(np.int16).tofile(output_dir / "sr_aerosol.img")
+        qa.astype(np.uint8).tofile(output_dir / "sr_aerosol_qa.img")
+        print(f"  sr_aerosol.img, sr_aerosol_qa.img")
+    else:
+        # Write COG output
+        output_path = TEST_DATA / "output_sr.tif"
+        nbands = len(sr_bands)
+        cog_profile = profile.copy()
+        cog_profile.update(
+            driver="GTiff",
+            dtype="int16",
+            count=nbands + 2,
+            compress="deflate",
+            tiled=True,
+            blockxsize=512,
+            blockysize=512,
+        )
+        print(f"Writing COG output to {output_path}...")
+        with rasterio.open(output_path, "w", **cog_profile) as dst:
+            for i, band in enumerate(sr_bands):
+                dst.write(band.astype(np.int16), i + 1)
+                dst.set_band_description(i + 1, BAND_NAMES[i])
+            dst.write(aerosol.astype(np.int16), nbands + 1)
+            dst.set_band_description(nbands + 1, "sr_aerosol")
+            dst.write(qa.astype(np.uint8), nbands + 2)
+            dst.set_band_description(nbands + 2, "sr_aerosol_qa")
 
     print("Done!")
 

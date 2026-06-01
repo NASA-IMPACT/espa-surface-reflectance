@@ -20,7 +20,9 @@ pub struct AerosolResult {
 
 /// Semi-empirical aerosol retrieval via spectral band ratios.
 ///
-/// Ported from `subaeroret_new()` in C `lut_subr.c`.
+/// Ported from `subaeroret_new()` in C `subaeroret.c`.
+/// Matches the C algorithm exactly: convergence loop that stops when
+/// residual starts increasing, then 3-point parabolic refinement.
 ///
 /// # Arguments
 /// * `is_water`        - Whether the pixel is classified as water
@@ -58,278 +60,176 @@ pub fn subaeroret_new(
 ) -> AerosolResult {
     let nband = erelc.len();
 
-    // Track the best result across all AOT steps
-    let mut best_raot = AOT550NM[iaots];
-    let mut best_residual = f64::MAX;
-    let mut best_iaots = iaots;
-
-    let mut prev_residual = f64::MAX;
-
-    for iaot in iaots..NAOT_VALS {
-        let raot = AOT550NM[iaot];
-
-        // Build AtmCorrCoefficients for the reference band
-        let coeff1 = AtmCorrCoefficients {
-            roatm_upper: roatm_ia_max[iband1],
-            roatm_coef: roatm_coef[iband1],
-            ttatmg_coef: ttatmg_coef[iband1],
-            satm_coef: satm_coef[iband1],
+    // Helper to compute atmospheric correction for one band
+    let atm_corr = |ib: usize, raot: f64| -> f64 {
+        let coeff = AtmCorrCoefficients {
+            roatm_upper: roatm_ia_max[ib],
+            roatm_coef: roatm_coef[ib],
+            ttatmg_coef: ttatmg_coef[ib],
+            satm_coef: satm_coef[ib],
         };
+        atmcorlamb2_new(&coeff, tgo_arr[ib], ib, raot, normext_p0a3[ib], troatm[ib], lambda, eps)
+    };
 
-        // Correct the reference band
-        let ros1 = atmcorlamb2_new(
-            &coeff1,
-            tgo_arr[iband1],
-            iband1,
-            raot,
-            normext_p0a3[iband1],
-            troatm[iband1],
-            lambda,
-            eps,
-        );
+    // Helper to compute residual at a given raot550nm value.
+    // Returns (residual, ros1, testth).
+    // testth is true if ANY band's corrected reflectance falls below tth[ib].
+    let compute_residual = |raot: f64| -> (f64, f64, bool) {
+        // Reference band correction
+        let ros1 = atm_corr(iband1, raot);
+        let mut testth = ros1 - tth[iband1] < 0.0;
 
-        // Test if surface reflectance is negative (below threshold)
-        let testth = ros1 - tth[iband1] < 0.0;
-
-        // Accumulate residual across active bands
         let mut residual = 0.0;
-        let mut nbval: usize = 0;
+        let mut nbval = 0usize;
 
-        for ib in 0..nband {
-            if erelc[ib] < 0.0 {
-                continue;
+        // For water: include iband1 in loop. For land: skip iband1.
+        if is_water {
+            for ib in 0..nband {
+                if erelc[ib] > 0.0 {
+                    let roslamb = atm_corr(ib, raot);
+                    if roslamb - tth[ib] < 0.0 {
+                        testth = true;
+                    }
+                    residual += roslamb * roslamb;
+                    nbval += 1;
+                }
             }
-
-            let coeff_ib = AtmCorrCoefficients {
-                roatm_upper: roatm_ia_max[ib],
-                roatm_coef: roatm_coef[ib],
-                ttatmg_coef: ttatmg_coef[ib],
-                satm_coef: satm_coef[ib],
-            };
-
-            let roslamb = atmcorlamb2_new(
-                &coeff_ib,
-                tgo_arr[ib],
-                ib,
-                raot,
-                normext_p0a3[ib],
-                troatm[ib],
-                lambda,
-                eps,
-            );
-
-            if is_water {
-                residual += roslamb * roslamb;
-            } else {
-                let diff = roslamb - erelc[ib] * ros1;
-                residual += diff * diff;
+        } else {
+            for ib in 0..nband {
+                // C: if (ib != iband1 && erelc[ib] > 0.0)
+                if ib != iband1 && erelc[ib] > 0.0 {
+                    let roslamb = atm_corr(ib, raot);
+                    if roslamb - tth[ib] < 0.0 {
+                        testth = true;
+                    }
+                    let diff = roslamb - erelc[ib] * ros1;
+                    residual += diff * diff;
+                    nbval += 1;
+                }
             }
-            nbval += 1;
         }
 
         if nbval > 0 {
             residual = residual.sqrt() / nbval as f64;
         }
 
-        // Track the global minimum
-        if residual < best_residual {
-            best_residual = residual;
-            best_raot = raot;
-            best_iaots = iaot;
-        }
-
-        // Break if we passed the minimum (residual is increasing or threshold triggered)
-        if testth || residual >= prev_residual {
-            break;
-        }
-
-        prev_residual = residual;
-    }
-
-    // --- Parabolic refinement using the three LUT points surrounding the minimum ---
-    // Re-evaluate residuals at the three surrounding AOT indices to fit a quadratic.
-
-    // Use the three surrounding AOT steps around best_iaots for refinement
-    let ia_lo = if best_iaots > 0 { best_iaots - 1 } else { best_iaots };
-    let ia_hi = if best_iaots + 1 < NAOT_VALS { best_iaots + 1 } else { best_iaots };
-
-    let pts: [(f64, f64); 3] = {
-        let mut arr = [(0.0f64, 0.0f64); 3];
-        for (k, &ia) in [ia_lo, best_iaots, ia_hi].iter().enumerate() {
-            let raot_pt = AOT550NM[ia];
-            let coeff1 = AtmCorrCoefficients {
-                roatm_upper: roatm_ia_max[iband1],
-                roatm_coef: roatm_coef[iband1],
-                ttatmg_coef: ttatmg_coef[iband1],
-                satm_coef: satm_coef[iband1],
-            };
-            let ros1 = atmcorlamb2_new(
-                &coeff1,
-                tgo_arr[iband1],
-                iband1,
-                raot_pt,
-                normext_p0a3[iband1],
-                troatm[iband1],
-                lambda,
-                eps,
-            );
-
-            let mut res = 0.0;
-            let mut nbval: usize = 0;
-            for ib in 0..nband {
-                if erelc[ib] < 0.0 {
-                    continue;
-                }
-                let coeff_ib = AtmCorrCoefficients {
-                    roatm_upper: roatm_ia_max[ib],
-                    roatm_coef: roatm_coef[ib],
-                    ttatmg_coef: ttatmg_coef[ib],
-                    satm_coef: satm_coef[ib],
-                };
-                let roslamb = atmcorlamb2_new(
-                    &coeff_ib,
-                    tgo_arr[ib],
-                    ib,
-                    raot_pt,
-                    normext_p0a3[ib],
-                    troatm[ib],
-                    lambda,
-                    eps,
-                );
-                if is_water {
-                    res += roslamb * roslamb;
-                } else {
-                    let diff = roslamb - erelc[ib] * ros1;
-                    res += diff * diff;
-                }
-                nbval += 1;
-            }
-            if nbval > 0 {
-                res = res.sqrt() / nbval as f64;
-            }
-            arr[k] = (raot_pt, res);
-        }
-        arr
+        (residual, ros1, testth)
     };
 
-    let (x1, y1) = pts[0];
-    let (x2, y2) = pts[1];
-    let (x3, y3) = pts[2];
+    // C variables: residual1 = 2000, residual2 = 1000
+    let mut residual1 = 2000.0f64;
+    let mut residual2 = 1000.0f64;
+    let mut iaot1 = 0usize;
+    let mut iaot2 = 0usize;
+    let mut raot1 = 0.0001f64;
+    let mut raot2 = 1.0e-6f64;
 
-    // Fit quadratic y = a*x^2 + b*x + c through three points.
-    // Only attempt if the three x-values are distinct.
-    if (x3 - x1).abs() > 1e-12 && (x2 - x1).abs() > 1e-12 && (x3 - x2).abs() > 1e-12 {
-        // Using the standard divided-difference / Lagrange approach
-        let denom = (x1 - x2) * (x1 - x3) * (x2 - x3);
-        if denom.abs() > 1e-20 {
-            let a = (x3 * (y2 - y1) + x2 * (y1 - y3) + x1 * (y3 - y2)) / denom;
-            let b = (x3 * x3 * (y1 - y2) + x2 * x2 * (y3 - y1) + x1 * x1 * (y2 - y3)) / denom;
+    // First iteration at iaots
+    let mut iaot = iaots;
+    let mut raot550nm = AOT550NM[iaot];
+    let (mut residual, _ros1, mut testth) = compute_residual(raot550nm);
 
-            // Vertex of parabola at x = -b / (2*a)
-            if a > 0.0 {
-                let raotmin = -b / (2.0 * a);
-                if raotmin >= 0.01 && raotmin <= 4.0 {
-                    // Evaluate residual at parabolic minimum
-                    let coeff1 = AtmCorrCoefficients {
-                        roatm_upper: roatm_ia_max[iband1],
-                        roatm_coef: roatm_coef[iband1],
-                        ttatmg_coef: ttatmg_coef[iband1],
-                        satm_coef: satm_coef[iband1],
-                    };
-                    let ros1_min = atmcorlamb2_new(
-                        &coeff1,
-                        tgo_arr[iband1],
-                        iband1,
-                        raotmin,
-                        normext_p0a3[iband1],
-                        troatm[iband1],
-                        lambda,
-                        eps,
-                    );
-                    let mut res_min = 0.0;
-                    let mut nbval: usize = 0;
-                    for ib in 0..nband {
-                        if erelc[ib] < 0.0 {
-                            continue;
-                        }
-                        let coeff_ib = AtmCorrCoefficients {
-                            roatm_upper: roatm_ia_max[ib],
-                            roatm_coef: roatm_coef[ib],
-                            ttatmg_coef: ttatmg_coef[ib],
-                            satm_coef: satm_coef[ib],
-                        };
-                        let roslamb = atmcorlamb2_new(
-                            &coeff_ib,
-                            tgo_arr[ib],
-                            ib,
-                            raotmin,
-                            normext_p0a3[ib],
-                            troatm[ib],
-                            lambda,
-                            eps,
-                        );
-                        if is_water {
-                            res_min += roslamb * roslamb;
-                        } else {
-                            let diff = roslamb - erelc[ib] * ros1_min;
-                            res_min += diff * diff;
-                        }
-                        nbval += 1;
-                    }
-                    if nbval > 0 {
-                        res_min = res_min.sqrt() / nbval as f64;
-                    }
-                    if res_min < best_residual {
-                        best_residual = res_min;
-                        best_raot = raotmin;
-                        // Find the nearest LUT index for iaots
-                        let mut nearest = best_iaots;
-                        let mut min_diff = (AOT550NM[best_iaots] - raotmin).abs();
-                        for ia in 0..NAOT_VALS {
-                            let d = (AOT550NM[ia] - raotmin).abs();
-                            if d < min_diff {
-                                min_diff = d;
-                                nearest = ia;
-                            }
-                        }
-                        best_iaots = nearest;
-                    }
-                }
-            }
-        }
+    // Convergence loop: increment iaot, stop when residual starts increasing
+    // or testth is triggered. Matches C: while ((iaot < NAOT_VALS) && (*residual < residual1) && (!testth))
+    iaot += 1;
+    while iaot < NAOT_VALS && residual < residual1 && !testth {
+        // Shift history
+        residual2 = residual1;
+        iaot2 = iaot1;
+        raot2 = raot1;
+        residual1 = residual;
+        raot1 = raot550nm;
+        iaot1 = iaot;
+
+        raot550nm = AOT550NM[iaot];
+        let (new_res, _ros1, new_testth) = compute_residual(raot550nm);
+        residual = new_res;
+        testth = new_testth;
+
+        iaot += 1;
     }
 
-    // Ensure raot is within valid physical range
-    let final_raot = best_raot.clamp(0.01, 4.0);
+    // Parabolic refinement
+    let mut final_raot;
+    let final_residual;
+    let final_iaots;
+
+    if iaot <= 1 {
+        // No convergence achieved — use the current AOT value
+        final_raot = raot550nm;
+        final_residual = residual;
+        final_iaots = if iaots > 3 { iaots - 3 } else { 0 };
+    } else {
+        // C: *raot = raot550nm; raotsaved = *raot;
+        final_raot = raot550nm;
+        let raotsaved = final_raot;
+
+        // 3-point quadratic fit: (raot2,residual2), (raot1,residual1), (raot550nm,residual)
+        let xa_fit = (residual1 - residual) * (raot2 - raot550nm);
+        let xb_fit = (residual2 - residual) * (raot1 - raot550nm);
+        let denom = xa_fit - xb_fit;
+        let raotmin = if denom.abs() > 1e-20 {
+            0.5 * (xa_fit * (raot2 + raot550nm) - xb_fit * (raot1 + raot550nm)) / denom
+        } else {
+            final_raot
+        };
+
+        let raotmin = if raotmin < 0.01 || raotmin > 4.0 {
+            final_raot
+        } else {
+            raotmin
+        };
+
+        // Evaluate residual at the parabolic minimum
+        let (residualm, _ros1, _testth) = compute_residual(raotmin);
+        let mut best_res = residualm;
+        final_raot = raotmin;
+
+        // Compare against the three stored values and pick the best
+        if best_res > residual {
+            best_res = residual;
+            final_raot = raotsaved;
+        }
+        if best_res > residual1 {
+            best_res = residual1;
+            final_raot = raot1;
+        }
+        if best_res > residual2 {
+            best_res = residual2;
+            final_raot = raot2;
+        }
+        final_residual = best_res;
+
+        // C: *iaots = MAX((iaot2 - 3), 0)
+        // Special case for water: if iaot == 1, iaots = 0
+        if is_water && iaot == 1 {
+            final_iaots = 0;
+        } else {
+            final_iaots = if iaot2 >= 3 { iaot2 - 3 } else { 0 };
+        }
+    }
 
     AerosolResult {
         raot: final_raot,
-        residual: best_residual,
+        residual: final_residual,
         eps,
-        iaots: best_iaots,
+        iaots: final_iaots,
     }
 }
 
-/// Bilinear interpolation of aerosol properties from window-center retrievals.
+/// Bilinear interpolation of a per-pixel array from window-center values.
 ///
-/// Ported from `aerosol_interp()` in C LaSRC code.
+/// Ported from `aerosol_interp_landsat()` in C LaSRC code (`aero_interp.c`).
+/// Called once for taero, once for teps, matching the C calling convention.
 ///
-/// For each pixel not at a window center, find the four surrounding window centers
-/// and bilinearly interpolate `taero` and `teps`. Skip fill pixels.
-/// Interpolated pixels are marked with [`IPFLAG_INTERP_WINDOW`].
-///
-/// # Arguments
-/// * `taero`            - Aerosol optical thickness array (nlines * nsamps), modified in place
-/// * `teps`             - Angstrom exponent array (nlines * nsamps), modified in place
-/// * `ipflag`           - QA/processing-flag array (nlines * nsamps), modified in place
-/// * `qa_band`          - QA input band (fill == 0 pixels are skipped)
-/// * `nlines`           - Number of image lines
-/// * `nsamps`           - Number of image samples
-/// * `aero_window`      - Full aerosol window size (pixels)
-/// * `half_aero_window` - Half aerosol window size (pixels)
+/// For each non-center, non-fill pixel, find the four surrounding window centers
+/// and bilinearly interpolate.  Center pixels are skipped (they keep their
+/// existing values and ipflag).  Non-center pixels get ipflag **assigned** to
+/// `IPFLAG_INTERP_WINDOW` (clearing all other bits), with `IPFLAG_WATER` OR'd
+/// in if any surrounding center was water.  Fill pixels are cleaned up at the
+/// end to have only `IPFLAG_FILL`.
 pub fn aerosol_interp(
-    taero: &mut [f64],
-    teps: &mut [f64],
+    data: &mut [f64],
     ipflag: &mut [u8],
     qa_band: &[u16],
     nlines: usize,
@@ -337,256 +237,246 @@ pub fn aerosol_interp(
     aero_window: usize,
     half_aero_window: usize,
 ) {
-    for iline in 0..nlines {
-        for isamp in 0..nsamps {
-            let pix = iline * nsamps + isamp;
+    let aero_step: f64 = 1.0 / aero_window as f64;
+    let water_bit = 1u8 << IPFLAG_WATER;
+
+    for line in 0..nlines {
+        // C: center_line = (int)(line * aero_step) * aero_window + half_aero_window
+        let center_line = ((line as f64 * aero_step) as isize) as usize * aero_window
+            + half_aero_window;
+
+        // Fractional distance and neighbor line
+        let yaero = (line as f64 - center_line as f64) * aero_step;
+        let u_signed = yaero - (yaero as i32) as f64; // C: yaero - (int)yaero
+        let center_line1 = if u_signed < 0.0 {
+            if center_line >= aero_window {
+                center_line - aero_window
+            } else {
+                center_line
+            }
+        } else {
+            let cl1 = center_line + aero_window;
+            if cl1 >= nlines.saturating_sub(1) {
+                center_line
+            } else {
+                cl1
+            }
+        };
+        let u = u_signed.abs();
+
+        for samp in 0..nsamps {
+            let pix = line * nsamps + samp;
 
             // Skip fill pixels
-            if qa_band[pix] == INPUT_FILL as u16 {
+            if is_fill_pixel(qa_band[pix]) {
                 continue;
             }
 
-            // Find the surrounding window center row indices.
-            // Window centers are at half_aero_window, half_aero_window + aero_window, ...
-            // i.e. row = half_aero_window + k * aero_window  for integer k >= 0.
-            let center_row0 = if iline < half_aero_window {
-                half_aero_window
-            } else {
-                // Largest center row <= iline
-                let steps = (iline - half_aero_window) / aero_window;
-                half_aero_window + steps * aero_window
-            };
-            let center_row1 = center_row0 + aero_window;
+            // C: center_samp = (int)(samp * aero_step) * aero_window + half_aero_window
+            let center_samp = ((samp as f64 * aero_step) as isize) as usize * aero_window
+                + half_aero_window;
 
-            let center_col0 = if isamp < half_aero_window {
-                half_aero_window
-            } else {
-                let steps = (isamp - half_aero_window) / aero_window;
-                half_aero_window + steps * aero_window
-            };
-            let center_col1 = center_col0 + aero_window;
-
-            // Clamp to image bounds
-            let r0 = center_row0.min(nlines - 1);
-            let r1 = center_row1.min(nlines - 1);
-            let c0 = center_col0.min(nsamps - 1);
-            let c1 = center_col1.min(nsamps - 1);
-
-            // Collect corner values (use only valid IPFLAG_CLEAR pixels)
-            let flag_bit = 1u8 << IPFLAG_CLEAR;
-            let corners = [
-                (r0, c0),
-                (r0, c1),
-                (r1, c0),
-                (r1, c1),
-            ];
-
-            // Check if any corner has valid data
-            let valid_corners: Vec<(usize, usize)> = corners
-                .iter()
-                .filter(|&&(r, c)| ipflag[r * nsamps + c] & flag_bit != 0)
-                .cloned()
-                .collect();
-
-            if valid_corners.is_empty() {
+            // Skip center pixels — they already have their values
+            if samp == center_samp && line == center_line {
                 continue;
             }
 
-            // Bilinear interpolation weights.
-            // If r0 == r1 or c0 == c1 (edge of image), degenerate to nearest valid.
-            // Use signed arithmetic to avoid usize underflow when the pixel is before
-            // the first window center (iline < r0 or isamp < c0).
-            let dr = if r1 > r0 {
-                (iline as isize - r0 as isize).max(0) as f64 / (r1 - r0) as f64
-            } else {
-                0.0
-            };
-            let dc = if c1 > c0 {
-                (isamp as isize - c0 as isize).max(0) as f64 / (c1 - c0) as f64
-            } else {
-                0.0
-            };
-
-            // Weighted sum over the four corners, using only valid ones.
-            let weights = [
-                (1.0 - dr) * (1.0 - dc), // (r0, c0)
-                (1.0 - dr) * dc,           // (r0, c1)
-                dr * (1.0 - dc),           // (r1, c0)
-                dr * dc,                   // (r1, c1)
-            ];
-
-            let mut sum_aero = 0.0;
-            let mut sum_eps = 0.0;
-            let mut sum_w = 0.0;
-
-            for (k, &(r, c)) in corners.iter().enumerate() {
-                if ipflag[r * nsamps + c] & flag_bit != 0 {
-                    let w = weights[k];
-                    sum_aero += w * taero[r * nsamps + c];
-                    sum_eps += w * teps[r * nsamps + c];
-                    sum_w += w;
+            // Fractional distance and neighbor sample
+            let xaero = (samp as f64 - center_samp as f64) * aero_step;
+            let v_signed = xaero - (xaero as i32) as f64;
+            let center_samp1 = if v_signed < 0.0 {
+                if center_samp >= aero_window {
+                    center_samp - aero_window
+                } else {
+                    center_samp
                 }
-            }
+            } else {
+                let cs1 = center_samp + aero_window;
+                if cs1 >= nsamps.saturating_sub(1) {
+                    center_samp
+                } else {
+                    cs1
+                }
+            };
+            let v = v_signed.abs();
 
-            if sum_w > 0.0 {
-                taero[pix] = sum_aero / sum_w;
-                teps[pix] = sum_eps / sum_w;
-                ipflag[pix] |= 1u8 << IPFLAG_INTERP_WINDOW;
+            // Four corner center pixels
+            let pix11 = center_line * nsamps + center_samp;
+            let pix12 = center_line * nsamps + center_samp1;
+            let pix21 = center_line1 * nsamps + center_samp;
+            let pix22 = center_line1 * nsamps + center_samp1;
+
+            // Bilinear interpolation (unconditional — no ipflag check on corners)
+            let a11 = data[pix11];
+            let a12 = data[pix12];
+            let a21 = data[pix21];
+            let a22 = data[pix22];
+            data[pix] = a11
+                + u * (a21 - a11)
+                + v * (a12 - a11)
+                + u * v * (a11 - a12 - a21 + a22);
+
+            // Set ipflag: clear everything, set INTERP_WINDOW
+            ipflag[pix] = 1u8 << IPFLAG_INTERP_WINDOW;
+
+            // If any corner center was water, mark this pixel as water too
+            if (ipflag[pix11] & water_bit != 0)
+                || (ipflag[pix12] & water_bit != 0)
+                || (ipflag[pix21] & water_bit != 0)
+                || (ipflag[pix22] & water_bit != 0)
+            {
+                ipflag[pix] |= water_bit;
             }
+        }
+    }
+
+    // Clean up fill pixels: ensure they only have IPFLAG_FILL
+    let npix = nlines * nsamps;
+    for pix in 0..npix {
+        if is_fill_pixel(qa_band[pix]) {
+            ipflag[pix] = 1u8 << IPFLAG_FILL;
         }
     }
 }
 
 /// Three-pass local averaging to fix pixels with invalid aerosol retrievals.
 ///
-/// Ported from `fix_invalid_aerosols()` in C LaSRC code.
+/// Ported from `fix_invalid_aerosols_landsat()` and `fill_with_local_average_landsat()`
+/// in C LaSRC code (`aero_interp.c`).
 ///
-/// - Pass 1 (forward):  require `min_clear_pix` valid (IPFLAG_CLEAR) neighbors.
-/// - Pass 2 (forward):  require 1 valid pixel; also allow IPFLAG_FIXED pixels.
+/// Only iterates over **center pixels** (stepping by `aero_window`, starting at
+/// `half_aero_window`).  Uses a separate `smflag` array to track filled pixels
+/// (C Landsat never sets IPFLAG_FIXED).
+///
+/// - Pass 1 (forward):  require `min_clear_pix` valid neighbors, don't use filled.
+/// - Pass 2 (forward):  require 1 valid pixel, also allow previously-filled pixels.
 /// - Pass 3 (reverse):  same as pass 2 but iterate in reverse order.
-///
-/// Fixed pixels are marked with [`IPFLAG_FIXED`].
 ///
 /// # Arguments
 /// * `taero`                - Aerosol optical thickness (modified in place)
 /// * `teps`                 - Angstrom exponent (modified in place)
-/// * `ipflag`               - Processing flags (modified in place)
+/// * `ipflag`               - Processing flags (NOT modified — Landsat never sets IPFLAG_FIXED)
 /// * `nlines`               - Number of image lines
 /// * `nsamps`               - Number of image samples
-/// * `aero_window`          - Aerosol retrieval window size
+/// * `aero_window`          - Aerosol retrieval window size (NxN)
 /// * `half_aero_window`     - Half of aerosol window
-/// * `fix_aero_window`      - Search window for fixing invalid retrievals
+/// * `fix_aero_window`      - Search window for fixing invalid retrievals (WxW)
 /// * `half_fix_aero_window` - Half of fix window
 /// * `min_clear_pix`        - Minimum number of clear neighbors required in pass 1
 pub fn fix_invalid_aerosols(
     taero: &mut [f64],
     teps: &mut [f64],
-    ipflag: &mut [u8],
+    ipflag: &[u8],
     nlines: usize,
     nsamps: usize,
-    _aero_window: usize,
-    _half_aero_window: usize,
-    fix_aero_window: usize,
+    aero_window: usize,
+    half_aero_window: usize,
+    _fix_aero_window: usize,
     half_fix_aero_window: usize,
     min_clear_pix: usize,
 ) {
-    let clear_bit = 1u8 << IPFLAG_CLEAR;
-    let fixed_bit = 1u8 << IPFLAG_FIXED;
+    let valid_bit = 1u8 << IPFLAG_CLEAR; // lasrc_qa_is_valid_aerosol_retrieval
     let npix = nlines * nsamps;
+    let mut smflag = vec![false; npix];
 
-    // ---- Pass 1: forward, require min_clear_pix IPFLAG_CLEAR neighbors ----
-    for iline in 0..nlines {
-        for isamp in 0..nsamps {
-            let pix = iline * nsamps + isamp;
-            if ipflag[pix] & clear_bit != 0 || ipflag[pix] & fixed_bit != 0 {
-                continue; // already valid
-            }
+    // C: window_offset = LHALF_FIX_AERO_WINDOW - half_aero_window
+    let window_offset = half_fix_aero_window as isize - half_aero_window as isize;
+    let step = aero_window as isize;
 
-            let row_lo = iline.saturating_sub(half_fix_aero_window);
-            let row_hi = (iline + half_fix_aero_window + 1).min(nlines);
-            let col_lo = isamp.saturating_sub(half_fix_aero_window);
-            let col_hi = (isamp + half_fix_aero_window + 1).min(nsamps);
+    // Inner function matching fill_with_local_average_landsat
+    let fill_pass = |forward: bool,
+                     required_clear: usize,
+                     use_filled: bool,
+                     taero: &mut [f64],
+                     teps: &mut [f64],
+                     smflag: &mut [bool]| {
+        let (start_line, start_samp, step_val): (isize, isize, isize) = if forward {
+            (half_aero_window as isize, half_aero_window as isize, step)
+        } else {
+            // C: start = ((int)round((double)nlines / aero_window) - 1) * aero_window + half_aero_window
+            let sl = ((nlines as f64 / aero_window as f64).round() as isize - 1)
+                * aero_window as isize
+                + half_aero_window as isize;
+            let ss = ((nsamps as f64 / aero_window as f64).round() as isize - 1)
+                * aero_window as isize
+                + half_aero_window as isize;
+            (sl, ss, -step)
+        };
 
-            let mut sum_aero = 0.0;
-            let mut sum_eps_val = 0.0;
-            let mut count = 0usize;
+        let mut line = start_line;
+        while line > 0 && line < nlines as isize {
+            let mut samp = start_samp;
+            while samp > 0 && samp < nsamps as isize {
+                let curr_pix = line as usize * nsamps + samp as usize;
 
-            for r in row_lo..row_hi {
-                for c in col_lo..col_hi {
-                    let n = r * nsamps + c;
-                    if ipflag[n] & clear_bit != 0 {
-                        sum_aero += taero[n];
-                        sum_eps_val += teps[n];
-                        count += 1;
+                // Skip fill pixels
+                if ipflag[curr_pix] & (1u8 << IPFLAG_FILL) != 0 {
+                    samp += step_val;
+                    continue;
+                }
+
+                // Skip already-valid or already-filled
+                if (ipflag[curr_pix] & valid_bit != 0) || smflag[curr_pix] {
+                    samp += step_val;
+                    continue;
+                }
+
+                // Search WxW window around current center pixel, stepping by aero_window
+                let mut sum_aero = 0.0;
+                let mut sum_eps = 0.0;
+                let mut nbclrpix = 0usize;
+
+                let mut iline = line - window_offset;
+                while iline <= line + window_offset {
+                    if iline < 0 || iline >= nlines as isize {
+                        iline += step;
+                        continue;
                     }
-                }
-            }
+                    let ilpix = iline as usize * nsamps;
 
-            if count >= min_clear_pix {
-                taero[pix] = sum_aero / count as f64;
-                teps[pix] = sum_eps_val / count as f64;
-                ipflag[pix] |= fixed_bit;
-            }
-        }
-    }
+                    let mut isamp = samp - window_offset;
+                    while isamp <= samp + window_offset {
+                        if isamp < 0 || isamp >= nsamps as isize {
+                            isamp += step;
+                            continue;
+                        }
+                        let ipix = ilpix + isamp as usize;
 
-    // ---- Pass 2: forward, require 1 pixel (CLEAR or FIXED) ----
-    for iline in 0..nlines {
-        for isamp in 0..nsamps {
-            let pix = iline * nsamps + isamp;
-            if ipflag[pix] & clear_bit != 0 || ipflag[pix] & fixed_bit != 0 {
-                continue;
-            }
-
-            let row_lo = iline.saturating_sub(half_fix_aero_window);
-            let row_hi = (iline + half_fix_aero_window + 1).min(nlines);
-            let col_lo = isamp.saturating_sub(half_fix_aero_window);
-            let col_hi = (isamp + half_fix_aero_window + 1).min(nsamps);
-
-            let mut sum_aero = 0.0;
-            let mut sum_eps_val = 0.0;
-            let mut count = 0usize;
-
-            for r in row_lo..row_hi {
-                for c in col_lo..col_hi {
-                    let n = r * nsamps + c;
-                    if ipflag[n] & clear_bit != 0 || ipflag[n] & fixed_bit != 0 {
-                        sum_aero += taero[n];
-                        sum_eps_val += teps[n];
-                        count += 1;
+                        if (ipflag[ipix] & valid_bit != 0)
+                            || (use_filled && smflag[ipix])
+                        {
+                            nbclrpix += 1;
+                            sum_aero += taero[ipix];
+                            sum_eps += teps[ipix];
+                        }
+                        isamp += step;
                     }
+                    iline += step;
                 }
-            }
 
-            if count >= 1 {
-                taero[pix] = sum_aero / count as f64;
-                teps[pix] = sum_eps_val / count as f64;
-                ipflag[pix] |= fixed_bit;
-            }
-        }
-    }
-
-    // ---- Pass 3: reverse, same as pass 2 ----
-    for idx in (0..npix).rev() {
-        let pix = idx;
-        if ipflag[pix] & clear_bit != 0 || ipflag[pix] & fixed_bit != 0 {
-            continue;
-        }
-
-        let iline = pix / nsamps;
-        let isamp = pix % nsamps;
-
-        let row_lo = iline.saturating_sub(half_fix_aero_window);
-        let row_hi = (iline + half_fix_aero_window + 1).min(nlines);
-        let col_lo = isamp.saturating_sub(half_fix_aero_window);
-        let col_hi = (isamp + half_fix_aero_window + 1).min(nsamps);
-
-        let mut sum_aero = 0.0;
-        let mut sum_eps_val = 0.0;
-        let mut count = 0usize;
-
-        for r in row_lo..row_hi {
-            for c in col_lo..col_hi {
-                let n = r * nsamps + c;
-                if ipflag[n] & clear_bit != 0 || ipflag[n] & fixed_bit != 0 {
-                    sum_aero += taero[n];
-                    sum_eps_val += teps[n];
-                    count += 1;
+                if nbclrpix >= required_clear {
+                    taero[curr_pix] = sum_aero / nbclrpix as f64;
+                    teps[curr_pix] = sum_eps / nbclrpix as f64;
+                    smflag[curr_pix] = true;
+                } else {
+                    taero[curr_pix] = DEFAULT_AERO;
+                    teps[curr_pix] = DEFAULT_EPS;
                 }
+
+                samp += step_val;
             }
+            line += step_val;
         }
+    };
 
-        if count >= 1 {
-            taero[pix] = sum_aero / count as f64;
-            teps[pix] = sum_eps_val / count as f64;
-            ipflag[pix] |= fixed_bit;
-        }
-    }
+    // Pass 1: forward, require min_clear_pix, don't use filled
+    fill_pass(true, min_clear_pix, false, taero, teps, &mut smflag);
 
-    // Suppress unused-parameter warnings for window params not needed in the
-    // inner loops (the C code uses fix_aero_window only for bounds clamping
-    // which we do via saturating_sub / min).
-    let _ = fix_aero_window;
+    // Pass 2: forward, require 1, use filled
+    fill_pass(true, 1, true, taero, teps, &mut smflag);
+
+    // Pass 3: reverse, require 1, use filled
+    fill_pass(false, 1, true, taero, teps, &mut smflag);
 }
 
 #[cfg(test)]
@@ -623,7 +513,7 @@ mod tests {
         let mut taero = vec![0.0f64; npix];
         let mut teps = vec![0.0f64; npix];
         let mut ipflag = vec![0u8; npix];
-        let qa_band = vec![1u16; npix];
+        let qa_band = vec![2u16; npix]; // bit 0 = 0 means not fill
         for i in (1..nlines).step_by(3) {
             for j in (1..nsamps).step_by(3) {
                 let pix = i * nsamps + j;
@@ -632,7 +522,8 @@ mod tests {
                 ipflag[pix] = 1 << IPFLAG_CLEAR;
             }
         }
-        aerosol_interp(&mut taero, &mut teps, &mut ipflag, &qa_band, nlines, nsamps, 3, 1);
+        aerosol_interp(&mut taero, &mut ipflag, &qa_band, nlines, nsamps, 3, 1);
+        aerosol_interp(&mut teps, &mut ipflag, &qa_band, nlines, nsamps, 3, 1);
         // Check that non-center pixels got interpolated values
         let non_center_pix = 0 * nsamps + 0; // pixel (0,0)
         assert!(taero[non_center_pix] > 0.0, "Pixel (0,0) should have interpolated aerosol");
@@ -646,7 +537,7 @@ mod tests {
         let mut taero = vec![0.0f64; npix];
         let mut teps = vec![0.0f64; npix];
         let mut ipflag = vec![0u8; npix];
-        // Set some valid centers
+        // Set some valid centers (aero_window=3, half=1, so centers at 1,4,7)
         for i in (1..nlines).step_by(3) {
             for j in (1..nsamps).step_by(3) {
                 let pix = i * nsamps + j;
@@ -660,8 +551,8 @@ mod tests {
         ipflag[bad_pix] = 0;
         taero[bad_pix] = 0.0;
 
-        fix_invalid_aerosols(&mut taero, &mut teps, &mut ipflag, nlines, nsamps, 3, 1, 15, 7, 4);
-        assert!(ipflag[bad_pix] & (1 << IPFLAG_FIXED) != 0, "Should be fixed");
+        fix_invalid_aerosols(&mut taero, &mut teps, &ipflag, nlines, nsamps, 3, 1, 15, 7, 4);
+        // Landsat never sets IPFLAG_FIXED — but taero should be filled
         assert!(taero[bad_pix] > 0.0, "Should have filled value");
     }
 }

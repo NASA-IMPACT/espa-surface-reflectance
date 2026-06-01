@@ -109,6 +109,15 @@ pub const TAURAY_LANDSAT: [f64; NSRL_BANDS] = [
     0.23638, 0.16933, 0.09070, 0.04827, 0.01563, 0.00129, 0.00037, 0.07984,
 ];
 
+// Surface reflectance threshold arrays for subaeroret_new (per band)
+// C: landsat_tth[NSRL_BANDS] — bands 1,2,3,4,5,6,7,9
+pub const LANDSAT_TTH: [f64; NSRL_BANDS] = [
+    1.0e-3, 1.0e-3, 0.0, 1.0e-3, 0.0, 0.0, 1.0e-4, 0.0,
+];
+pub const LANDSAT_TTH_WATER: [f64; NSRL_BANDS] = [
+    1.0e-3, 1.0e-3, 0.0, 1.0e-3, 1.0e-3, 0.0, 1.0e-4, 0.0,
+];
+
 // Band wavelengths (micrometers)
 pub const LAMBDA_LANDSAT: [f64; NREFLL_BANDS] = [0.443, 0.480, 0.585, 0.655, 0.865, 1.61, 2.2];
 pub const LAMBDA_SENTINEL: [f64; 11] = [
@@ -164,5 +173,11 @@ pub const HALF_FAILED_WIN: usize = 30;
 pub const MIN_VALID_WINDOW_PIX: usize = 20;
 
 // Fill values
-pub const INPUT_FILL: u16 = 0;
 pub const ANGLE_FILL: f64 = -999.0;
+
+/// Landsat Collection 2 QA_PIXEL: bit 0 = designated fill.
+/// Matches C code's `level1_qa_is_fill()`.
+#[inline]
+pub fn is_fill_pixel(qa: u16) -> bool {
+    (qa & 1) == 1
+}

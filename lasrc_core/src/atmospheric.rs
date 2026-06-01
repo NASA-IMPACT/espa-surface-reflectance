@@ -114,7 +114,9 @@ pub fn atmcorlamb2_new(
 /// * `uoz`          - Ozone amount (cm-atm)
 /// * `uwv`          - Water vapour amount (g/cm²)
 /// * `rotoa`        - TOA reflectance
-/// * `eps`          - Angstrom exponent (unused here, kept for API parity)
+/// * `lambda`       - Wavelength table (µm), one entry per band
+/// * `max_band_idx` - Maximum valid band index for wavelength scaling
+/// * `eps`          - Angstrom exponent
 ///
 /// # Returns
 /// [`AtmCorrResult`] with surface reflectance and intermediate quantities.
@@ -135,8 +137,25 @@ pub fn atmcorlamb2(
     uoz: f64,
     uwv: f64,
     rotoa: f64,
-    _eps: f64,
+    lambda: &[f64],
+    max_band_idx: usize,
+    eps: f64,
 ) -> AtmCorrResult {
+    // Modify AOT based on Angstrom coefficient and wavelength.
+    // C: mraot550nm = (raot550nm / normext[iband*NPRES*NAOT+3]) * pow(lambda[ib]*lambda_sf, -eps)
+    let lambda_sf: f64 = 1.0 / 0.55;
+    let mraot550nm = if eps < 0.0 || iband > max_band_idx {
+        raot550nm
+    } else {
+        let normext_idx = iband * NPRES_VALS * NAOT_VALS + 3;
+        let normext_val = if normext_idx < lut.normext.len() {
+            lut.normext[normext_idx]
+        } else {
+            1.0
+        };
+        (raot550nm / normext_val) * (lambda[iband] * lambda_sf).powf(-eps)
+    };
+
     // Normalised atmospheric pressure
     let atm_pres = pressure * ONE_DIV_ATMOS_PRES_0;
 
@@ -146,18 +165,18 @@ pub fn atmcorlamb2(
     // Rayleigh scattering reflectance
     let xrorayp = rayleigh_reflectance(xfi, xmuv, xmus, xtaur);
 
-    // Find pressure and AOT indices into the LUT
-    let indices: LutIndices = lut.find_indices(pressure, raot550nm);
+    // Find pressure and AOT indices into the LUT using modified AOT
+    let indices: LutIndices = lut.find_indices(pressure, mraot550nm);
 
-    // Interpolate atmospheric quantities from LUT
-    let satm = lut.interp_spherical_albedo(&indices, iband, pressure, raot550nm);
+    // Interpolate atmospheric quantities from LUT using modified AOT
+    let satm = lut.interp_spherical_albedo(&indices, iband, pressure, mraot550nm);
     let roatm_raw = lut.interp_atmospheric_reflectance(
-        &indices, iband, pressure, raot550nm, xts, xtv, xmus, xmuv, cosxfi,
+        &indices, iband, pressure, mraot550nm, xts, xtv, xmus, xmuv, cosxfi,
     );
 
     // Downward and upward transmittances, then total atmospheric transmittance
-    let xtts = lut.interp_transmission(&indices, iband, pressure, raot550nm, xts);
-    let xttv = lut.interp_transmission(&indices, iband, pressure, raot550nm, xtv);
+    let xtts = lut.interp_transmission(&indices, iband, pressure, mraot550nm, xts);
+    let xttv = lut.interp_transmission(&indices, iband, pressure, mraot550nm, xtv);
     let ttatm = xtts * xttv;
 
     // Gas transmissions

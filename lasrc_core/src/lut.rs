@@ -24,6 +24,10 @@ pub struct LookupTables {
     pub nbfi: Vec<i32>,
     pub ttv: Vec<f64>,
     pub tts: [f64; NSOLAR_ZEN_VALS],
+    /// Cumulative azimuth angle offset for each solar zenith index.
+    /// Used to index into the rolutt NSOLAR_VALS block.
+    /// Loaded from the INDTS SDS in the angle HDF file.
+    pub indts: Vec<i32>,
     /// Number of SR bands (8 for Landsat, 11 for Sentinel)
     pub nsr_bands: usize,
 }
@@ -44,18 +48,14 @@ impl LookupTables {
     /// Searches AOT550NM[22] to find iaot1 where raot550nm > AOT550NM[iaot1], iaot2 = iaot1+1.
     /// Both are clamped to valid ranges.
     pub fn find_indices(&self, pressure: f64, raot550nm: f64) -> LutIndices {
-        // Find pressure index: ip1 is first index where pressure < TPRES[ip1]
+        // Find pressure index: ip1 is the LAST index where pressure < TPRES[ip1].
+        // C: for (ip = 0; ip < NPRES_VALS-1; ip++) { if (pres < tpres[ip]) ip1 = ip; }
+        // TPRES is decreasing [1050, 1013, 900, ...], so this finds the bracket.
         let mut ip1 = 0usize;
-        for i in 0..NPRES_VALS {
-            if pressure < TPRES[i] {
-                ip1 = i;
-                break;
+        for ip in 0..NPRES_VALS - 1 {
+            if pressure < TPRES[ip] {
+                ip1 = ip;
             }
-            ip1 = i;
-        }
-        // Clamp ip1 so ip2 = ip1+1 is valid
-        if ip1 >= NPRES_VALS - 1 {
-            ip1 = NPRES_VALS - 2;
         }
         let ip2 = ip1 + 1;
 
@@ -219,8 +219,8 @@ impl LookupTables {
             let nbfic_i = self.nbfic[angle_idx];
 
             // offset within the NSOLAR_VALS block for this (iv, is) combination
-            // j corresponds to the cumulative azimuth offset
-            let j = (nbfic_i - nbfi_i as f64) as usize;
+            // C: j = indts[is] + nbfic[i] - nbfi[i]
+            let j = self.indts[is] as usize + (nbfic_i - nbfi_i as f64) as usize;
 
             if is != 0 && iv != 0 {
                 let mut isca = ((xtsmax_i - scaa) * 0.25 + 1.0) as usize;
@@ -378,6 +378,7 @@ mod tests {
             nbfi,
             ttv,
             tts,
+            indts: vec![0; NSUNANGLE_VALS],
             nsr_bands: nsr,
         }
     }
