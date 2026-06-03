@@ -8,22 +8,23 @@ use crate::constants::{
 use crate::geometry::scattering_angle;
 
 /// Pre-computed atmospheric lookup tables.
+/// All float data is stored as f32 to match C's `float` precision.
 pub struct LookupTables {
     /// Intrinsic atmospheric reflectance: [NSR_BANDS][NPRES_VALS][NAOT_VALS][NSOLAR_VALS]
-    pub rolutt: Vec<f64>,
+    pub rolutt: Vec<f32>,
     /// Atmospheric transmission: [NSR_BANDS][NPRES_VALS][NAOT_VALS][NSUNANGLE_VALS]
-    pub transt: Vec<f64>,
+    pub transt: Vec<f32>,
     /// Spherical albedo: [NSR_BANDS][NPRES_VALS][NAOT_VALS]
-    pub sphalbt: Vec<f64>,
+    pub sphalbt: Vec<f32>,
     /// Aerosol extinction normalization: [NSR_BANDS][NPRES_VALS][NAOT_VALS]
-    pub normext: Vec<f64>,
+    pub normext: Vec<f32>,
     // Angle tables: [NVIEW_ZEN_VALS][NSOLAR_ZEN_VALS]
-    pub tsmax: Vec<f64>,
-    pub tsmin: Vec<f64>,
-    pub nbfic: Vec<f64>,
+    pub tsmax: Vec<f32>,
+    pub tsmin: Vec<f32>,
+    pub nbfic: Vec<f32>,
     pub nbfi: Vec<i32>,
-    pub ttv: Vec<f64>,
-    pub tts: [f64; NSOLAR_ZEN_VALS],
+    pub ttv: Vec<f32>,
+    pub tts: [f32; NSOLAR_ZEN_VALS],
     /// Cumulative azimuth angle offset for each solar zenith index.
     /// Used to index into the rolutt NSOLAR_VALS block.
     /// Loaded from the INDTS SDS in the angle HDF file.
@@ -48,25 +49,22 @@ impl LookupTables {
     /// Searches AOT550NM[22] to find iaot1 where raot550nm > AOT550NM[iaot1], iaot2 = iaot1+1.
     /// Both are clamped to valid ranges.
     pub fn find_indices(&self, pressure: f64, raot550nm: f64) -> LutIndices {
-        // Find pressure index: ip1 is the LAST index where pressure < TPRES[ip1].
-        // C: for (ip = 0; ip < NPRES_VALS-1; ip++) { if (pres < tpres[ip]) ip1 = ip; }
-        // TPRES is decreasing [1050, 1013, 900, ...], so this finds the bracket.
+        let pres = pressure as f32;
+        let raot = raot550nm as f32;
         let mut ip1 = 0usize;
         for ip in 0..NPRES_VALS - 1 {
-            if pressure < TPRES[ip] {
+            if pres < TPRES[ip] as f32 {
                 ip1 = ip;
             }
         }
         let ip2 = ip1 + 1;
 
-        // Find AOT index: iaot1 is last index where raot550nm > AOT550NM[iaot1]
         let mut iaot1 = 0usize;
         for i in 0..NAOT_VALS {
-            if raot550nm > AOT550NM[i] {
+            if raot > AOT550NM[i] as f32 {
                 iaot1 = i;
             }
         }
-        // Clamp iaot1 so iaot2 = iaot1+1 is valid
         if iaot1 >= NAOT_VALS - 1 {
             iaot1 = NAOT_VALS - 2;
         }
@@ -76,8 +74,7 @@ impl LookupTables {
     }
 
     /// Compute spherical albedo via bilinear interpolation across AOT and pressure.
-    ///
-    /// Ports `compsalb` from `lut_subr.c`.
+    /// All arithmetic in f32 matching C's float.
     pub fn interp_spherical_albedo(
         &self,
         indices: &LutIndices,
@@ -86,32 +83,33 @@ impl LookupTables {
         raot550nm: f64,
     ) -> f64 {
         let LutIndices { ip1, ip2, iaot1, iaot2 } = *indices;
+        let raot = raot550nm as f32;
+        let pres = pressure as f32;
 
-        let deltaaot =
-            (raot550nm - AOT550NM[iaot1]) / (AOT550NM[iaot2] - AOT550NM[iaot1]);
+        let aot1 = AOT550NM[iaot1] as f32;
+        let aot2 = AOT550NM[iaot2] as f32;
+        let deltaaot: f32 = (raot - aot1) / (aot2 - aot1);
 
         let iband_base = iband * NPRES_VALS * NAOT_VALS;
         let ip1_base = ip1 * NAOT_VALS;
         let ip2_base = ip2 * NAOT_VALS;
 
-        // Interpolate along AOT at pressure ip1
         let v_ip1_iaot1 = self.sphalbt[iband_base + ip1_base + iaot1];
         let v_ip1_iaot2 = self.sphalbt[iband_base + ip1_base + iaot2];
-        let satm1 = v_ip1_iaot1 + (v_ip1_iaot2 - v_ip1_iaot1) * deltaaot;
+        let satm1: f32 = v_ip1_iaot1 + (v_ip1_iaot2 - v_ip1_iaot1) * deltaaot;
 
-        // Interpolate along AOT at pressure ip2
         let v_ip2_iaot1 = self.sphalbt[iband_base + ip2_base + iaot1];
         let v_ip2_iaot2 = self.sphalbt[iband_base + ip2_base + iaot2];
-        let satm2 = v_ip2_iaot1 + (v_ip2_iaot2 - v_ip2_iaot1) * deltaaot;
+        let satm2: f32 = v_ip2_iaot1 + (v_ip2_iaot2 - v_ip2_iaot1) * deltaaot;
 
-        // Interpolate along pressure
-        let dpres = (pressure - TPRES[ip1]) / (TPRES[ip2] - TPRES[ip1]);
-        satm1 + (satm2 - satm1) * dpres
+        let tpres1 = TPRES[ip1] as f32;
+        let tpres2 = TPRES[ip2] as f32;
+        let dpres: f32 = (pres - tpres1) / (tpres2 - tpres1);
+        (satm1 + (satm2 - satm1) * dpres) as f64
     }
 
     /// Compute atmospheric transmission via 3D interpolation (zenith, AOT, pressure).
-    ///
-    /// Ports `comptrans` from `lut_subr.c`.
+    /// All arithmetic in f32 matching C's float.
     pub fn interp_transmission(
         &self,
         indices: &LutIndices,
@@ -121,20 +119,22 @@ impl LookupTables {
         xts: f64,
     ) -> f64 {
         let LutIndices { ip1, ip2, iaot1, iaot2 } = *indices;
+        let xts_f = xts as f32;
+        let raot = raot550nm as f32;
+        let pres = pressure as f32;
 
-        // Find sun angle index
-        let its = if xts <= XTS_MIN {
+        let its = if xts_f <= XTS_MIN as f32 {
             0
         } else {
-            ((xts - XTS_MIN) / XTS_STEP) as usize
+            ((xts_f - XTS_MIN as f32) / XTS_STEP as f32) as usize
         };
         let its = its.min(NSUNANGLE_VALS - 2);
 
-        // Fractional angle
-        let xmts = (xts - self.tts[its]) * 0.25;
+        let xmts: f32 = (xts_f - self.tts[its]) * 0.25f32;
 
-        let deltaaot =
-            (raot550nm - AOT550NM[iaot1]) / (AOT550NM[iaot2] - AOT550NM[iaot1]);
+        let aot1 = AOT550NM[iaot1] as f32;
+        let aot2 = AOT550NM[iaot2] as f32;
+        let deltaaot: f32 = (raot - aot1) / (aot2 - aot1);
 
         let iband_base = iband * NPRES_VALS * NAOT_X_NSUNANGLE;
         let ip1_base = ip1 * NAOT_X_NSUNANGLE;
@@ -142,75 +142,54 @@ impl LookupTables {
         let iaot1_base = iaot1 * NSUNANGLE_VALS;
         let iaot2_base = iaot2 * NSUNANGLE_VALS;
 
-        // ip1, iaot1: interpolate along angle
         let base = iband_base + ip1_base + iaot1_base;
         let xtranst = self.transt[base + its];
-        let xtiaot1_ip1 = xtranst + (self.transt[base + its + 1] - xtranst) * xmts;
+        let xtiaot1_ip1: f32 = xtranst + (self.transt[base + its + 1] - xtranst) * xmts;
 
-        // ip1, iaot2: interpolate along angle
         let base = iband_base + ip1_base + iaot2_base;
         let xtranst = self.transt[base + its];
-        let xtiaot2_ip1 = xtranst + (self.transt[base + its + 1] - xtranst) * xmts;
+        let xtiaot2_ip1: f32 = xtranst + (self.transt[base + its + 1] - xtranst) * xmts;
 
-        // Interpolate along AOT for ip1
-        let xtts1 = xtiaot1_ip1 + (xtiaot2_ip1 - xtiaot1_ip1) * deltaaot;
+        let xtts1: f32 = xtiaot1_ip1 + (xtiaot2_ip1 - xtiaot1_ip1) * deltaaot;
 
-        // ip2, iaot1: interpolate along angle
         let base = iband_base + ip2_base + iaot1_base;
         let xtranst = self.transt[base + its];
-        let xtiaot1_ip2 = xtranst + (self.transt[base + its + 1] - xtranst) * xmts;
+        let xtiaot1_ip2: f32 = xtranst + (self.transt[base + its + 1] - xtranst) * xmts;
 
-        // ip2, iaot2: interpolate along angle
         let base = iband_base + ip2_base + iaot2_base;
         let xtranst = self.transt[base + its];
-        let xtiaot2_ip2 = xtranst + (self.transt[base + its + 1] - xtranst) * xmts;
+        let xtiaot2_ip2: f32 = xtranst + (self.transt[base + its + 1] - xtranst) * xmts;
 
-        // Interpolate along AOT for ip2
-        let xtts2 = xtiaot1_ip2 + (xtiaot2_ip2 - xtiaot1_ip2) * deltaaot;
+        let xtts2: f32 = xtiaot1_ip2 + (xtiaot2_ip2 - xtiaot1_ip2) * deltaaot;
 
-        // Interpolate along pressure
-        let dpres = (pressure - TPRES[ip1]) / (TPRES[ip2] - TPRES[ip1]);
-        xtts1 + (xtts2 - xtts1) * dpres
+        let tpres1 = TPRES[ip1] as f32;
+        let tpres2 = TPRES[ip2] as f32;
+        let dpres: f32 = (pres - tpres1) / (tpres2 - tpres1);
+        (xtts1 + (xtts2 - xtts1) * dpres) as f64
     }
 
     /// Private helper: interpolate intrinsic reflectance at scattering angle.
-    ///
-    /// Ports `interp_refl_using_scat_angle` from `lut_subr.c`.
-    ///
-    /// # Arguments
-    /// * `iband` - Band index
-    /// * `ip` - Pressure index
-    /// * `iaot` - AOT index
-    /// * `scaa` - Scattering angle (degrees)
-    /// * `its` - Solar zenith table index
-    /// * `itv` - View zenith table index
-    /// * `t` - Solar angle interpolation parameter
-    /// * `u` - View angle interpolation parameter
+    /// All arithmetic in f32 matching C's float.
     fn interp_refl_at_scat_angle(
         &self,
         iband: usize,
         ip: usize,
         iaot: usize,
-        scaa: f64,
+        scaa: f32,
         its: usize,
         itv: usize,
-        t: f64,
-        u: f64,
-    ) -> f64 {
+        t: f32,
+        u: f32,
+    ) -> f32 {
         let rolutt_base = iband * NPRES_VALS * NAOT_X_NSOLAR
             + ip * NAOT_X_NSOLAR
             + iaot * crate::constants::NSOLAR_VALS;
 
-        let mut ro = [0.0f64; 4];
+        let mut ro = [0.0f32; 4];
 
-        // 4 corners: (itv, its), (itv, its+1), (itv+1, its), (itv+1, its+1)
-        // i=0: (itv,   its  )  is = its,   iv = itv
-        // i=1: (itv,   its+1)  is = its+1, iv = itv
-        // i=2: (itv+1, its  )  is = its,   iv = itv+1
-        // i=3: (itv+1, its+1)  is = its+1, iv = itv+1
         for i in 0..4usize {
-            let is = its + (i % 2); // its or its+1
-            let iv = if i < 2 { itv } else { itv + 1 }; // itv or itv+1
+            let is = its + (i % 2);
+            let iv = if i < 2 { itv } else { itv + 1 };
 
             let angle_idx = iv * NSOLAR_ZEN_VALS + is;
             let xtsmax_i = self.tsmax[angle_idx];
@@ -218,35 +197,33 @@ impl LookupTables {
             let nbfi_i = self.nbfi[angle_idx];
             let nbfic_i = self.nbfic[angle_idx];
 
-            // offset within the NSOLAR_VALS block for this (iv, is) combination
-            // C: j = indts[is] + nbfic[i] - nbfi[i]
-            let j = self.indts[is] as usize + (nbfic_i - nbfi_i as f64) as usize;
+            let j = self.indts[is] as usize + (nbfic_i - nbfi_i as f32) as usize;
 
             if is != 0 && iv != 0 {
-                let mut isca = ((xtsmax_i - scaa) * 0.25 + 1.0) as usize;
+                let mut isca = ((xtsmax_i - scaa) * 0.25f32 + 1.0f32) as usize;
                 if isca == 0 {
                     isca = 1;
                 }
 
                 let (sca1, sca2, isca_used) = if isca + 1 < nbfi_i as usize {
-                    let s1 = xtsmax_i - (isca as f64 - 1.0) * 4.0;
-                    let s2 = s1 - 4.0;
+                    let s1 = xtsmax_i - (isca as f32 - 1.0f32) * 4.0f32;
+                    let s2 = s1 - 4.0f32;
                     (s1, s2, isca)
                 } else {
                     let isca_c = (nbfi_i as usize).saturating_sub(1);
-                    let s1 = xtsmax_i - (isca_c as f64 - 1.0) * 4.0;
+                    let s1 = xtsmax_i - (isca_c as f32 - 1.0f32) * 4.0f32;
                     let s2 = xtsmin_i;
                     (s1, s2, isca_c)
                 };
 
                 let roinf_idx = rolutt_base + j + isca_used.saturating_sub(1);
                 let rosup_idx = rolutt_base + j + isca_used;
-                let roinf = if roinf_idx < self.rolutt.len() {
+                let roinf: f32 = if roinf_idx < self.rolutt.len() {
                     self.rolutt[roinf_idx]
                 } else {
                     0.0
                 };
-                let rosup = if rosup_idx < self.rolutt.len() {
+                let rosup: f32 = if rosup_idx < self.rolutt.len() {
                     self.rolutt[rosup_idx]
                 } else {
                     0.0
@@ -259,13 +236,11 @@ impl LookupTables {
             }
         }
 
-        // Bilinear interpolation of the 4 corner values
         ro[3] + u * (ro[1] - ro[3]) + t * (ro[2] - ro[3]) + u * t * (ro[0] - ro[1] - ro[2] + ro[3])
     }
 
     /// Compute intrinsic atmospheric reflectance via complex 5D interpolation.
-    ///
-    /// Ports `comproatm` from `lut_subr.c`.
+    /// All arithmetic in f32 matching C's float.
     #[allow(clippy::too_many_arguments)]
     pub fn interp_atmospheric_reflectance(
         &self,
@@ -280,19 +255,23 @@ impl LookupTables {
         cosxfi: f64,
     ) -> f64 {
         let LutIndices { ip1, ip2, iaot1, iaot2 } = *indices;
+        let pres = pressure as f32;
 
-        // Compute scattering angle
-        let scaa = scattering_angle(xmus, xmuv, cosxfi);
+        // Compute scattering angle (in f64, truncated to f32 like C)
+        let scaa = scattering_angle(xmus, xmuv, cosxfi) as f32;
+
+        let xtv_f = xtv as f32;
+        let xts_f = xts as f32;
 
         // View zenith index
-        let itv_f = (xtv - XTV_MIN) / XTV_STEP + 1.0;
+        let itv_f = (xtv_f - XTV_MIN as f32) / XTV_STEP as f32 + 1.0f32;
         let itv = (itv_f as usize).min(NVIEW_ZEN_VALS - 2);
 
         // Solar zenith index
-        let its_f = (xts - XTS_MIN) / XTS_STEP;
-        let its = if xts <= XTS_MIN {
+        let its = if xts_f <= XTS_MIN as f32 {
             0
         } else {
+            let its_f = (xts_f - XTS_MIN as f32) / XTS_STEP as f32;
             (its_f as usize).min(NSOLAR_ZEN_VALS - 2)
         };
 
@@ -301,36 +280,38 @@ impl LookupTables {
         let itv1_its_indx = itv_its_indx + NSOLAR_ZEN_VALS;
 
         let tts_denom = self.tts[its + 1] - self.tts[its];
-        let t = if tts_denom.abs() > f64::EPSILON {
-            (self.tts[its + 1] - xts) / tts_denom
+        let t: f32 = if tts_denom.abs() > f32::EPSILON {
+            (self.tts[its + 1] - xts_f) / tts_denom
         } else {
             0.0
         };
 
         let ttv_denom = self.ttv[itv1_its_indx] - self.ttv[itv_its_indx];
-        let u = if ttv_denom.abs() > f64::EPSILON {
-            (self.ttv[itv1_its_indx] - xtv) / ttv_denom
+        let u: f32 = if ttv_denom.abs() > f32::EPSILON {
+            (self.ttv[itv1_its_indx] - xtv_f) / ttv_denom
         } else {
             0.0
         };
 
-        // AOT interpolation in LOG space
-        let deltaaot = (raot550nm.ln() - LOG_AOT550NM[iaot1])
-            / (LOG_AOT550NM[iaot2] - LOG_AOT550NM[iaot1]);
+        // AOT interpolation in LOG space (C uses float for log)
+        let raot_f = raot550nm as f32;
+        let log_raot = raot_f.ln();
+        let log_aot1 = LOG_AOT550NM[iaot1] as f32;
+        let log_aot2 = LOG_AOT550NM[iaot2] as f32;
+        let deltaaot: f32 = (log_raot - log_aot1) / (log_aot2 - log_aot1);
 
-        // ip1: interpolate at iaot1 and iaot2, then in log-AOT space
         let roiaot1 = self.interp_refl_at_scat_angle(iband, ip1, iaot1, scaa, its, itv, t, u);
         let roiaot2 = self.interp_refl_at_scat_angle(iband, ip1, iaot2, scaa, its, itv, t, u);
-        let rop1 = roiaot1 + (roiaot2 - roiaot1) * deltaaot;
+        let rop1: f32 = roiaot1 + (roiaot2 - roiaot1) * deltaaot;
 
-        // ip2: interpolate at iaot1 and iaot2, then in log-AOT space
         let roiaot1 = self.interp_refl_at_scat_angle(iband, ip2, iaot1, scaa, its, itv, t, u);
         let roiaot2 = self.interp_refl_at_scat_angle(iband, ip2, iaot2, scaa, its, itv, t, u);
-        let rop2 = roiaot1 + (roiaot2 - roiaot1) * deltaaot;
+        let rop2: f32 = roiaot1 + (roiaot2 - roiaot1) * deltaaot;
 
-        // Interpolate along pressure
-        let dpres = (pressure - TPRES[ip1]) / (TPRES[ip2] - TPRES[ip1]);
-        rop1 + (rop2 - rop1) * dpres
+        let tpres1 = TPRES[ip1] as f32;
+        let tpres2 = TPRES[ip2] as f32;
+        let dpres: f32 = (pres - tpres1) / (tpres2 - tpres1);
+        (rop1 + (rop2 - rop1) * dpres) as f64
     }
 }
 
@@ -341,31 +322,31 @@ mod tests {
 
     fn make_test_lut() -> LookupTables {
         let nsr = 1;
-        let mut sphalbt = vec![0.0; nsr * NPRES_VALS * NAOT_VALS];
+        let mut sphalbt = vec![0.0f32; nsr * NPRES_VALS * NAOT_VALS];
         for ip in 0..NPRES_VALS {
             for ia in 0..NAOT_VALS {
-                sphalbt[ip * NAOT_VALS + ia] = AOT550NM[ia] * 0.1;
+                sphalbt[ip * NAOT_VALS + ia] = AOT550NM[ia] as f32 * 0.1;
             }
         }
-        let mut transt = vec![0.0; nsr * NPRES_VALS * NAOT_X_NSUNANGLE];
+        let mut transt = vec![0.0f32; nsr * NPRES_VALS * NAOT_X_NSUNANGLE];
         for ip in 0..NPRES_VALS {
             for ia in 0..NAOT_VALS {
                 for is_ in 0..NSUNANGLE_VALS {
                     let idx = ip * NAOT_X_NSUNANGLE + ia * NSUNANGLE_VALS + is_;
-                    transt[idx] = 1.0 - AOT550NM[ia] * 0.1;
+                    transt[idx] = 1.0 - AOT550NM[ia] as f32 * 0.1;
                 }
             }
         }
-        let normext = vec![1.0; nsr * NPRES_VALS * NAOT_VALS];
-        let rolutt = vec![0.01; nsr * NPRES_VALS * NAOT_X_NSOLAR];
-        let tsmax = vec![180.0; NVIEW_ZEN_VALS * NSOLAR_ZEN_VALS];
-        let tsmin = vec![0.0; NVIEW_ZEN_VALS * NSOLAR_ZEN_VALS];
-        let nbfic = vec![45.0; NVIEW_ZEN_VALS * NSOLAR_ZEN_VALS];
+        let normext = vec![1.0f32; nsr * NPRES_VALS * NAOT_VALS];
+        let rolutt = vec![0.01f32; nsr * NPRES_VALS * NAOT_X_NSOLAR];
+        let tsmax = vec![180.0f32; NVIEW_ZEN_VALS * NSOLAR_ZEN_VALS];
+        let tsmin = vec![0.0f32; NVIEW_ZEN_VALS * NSOLAR_ZEN_VALS];
+        let nbfic = vec![45.0f32; NVIEW_ZEN_VALS * NSOLAR_ZEN_VALS];
         let nbfi = vec![45; NVIEW_ZEN_VALS * NSOLAR_ZEN_VALS];
-        let ttv = vec![3.0; NVIEW_ZEN_VALS * NSOLAR_ZEN_VALS];
-        let mut tts = [0.0f64; NSOLAR_ZEN_VALS];
+        let ttv = vec![3.0f32; NVIEW_ZEN_VALS * NSOLAR_ZEN_VALS];
+        let mut tts = [0.0f32; NSOLAR_ZEN_VALS];
         for i in 0..NSOLAR_ZEN_VALS {
-            tts[i] = i as f64 * 4.0;
+            tts[i] = i as f32 * 4.0;
         }
         LookupTables {
             rolutt,

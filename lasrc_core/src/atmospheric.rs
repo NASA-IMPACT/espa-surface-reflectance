@@ -154,64 +154,70 @@ pub fn atmcorlamb2(
     max_band_idx: usize,
     eps: f64,
 ) -> AtmCorrResult {
+    // C uses float (f32) throughout atmcorlamb2. Truncate all intermediate
+    // values to f32 after calling f64 helper functions to match C precision.
+
     // Modify AOT based on Angstrom coefficient and wavelength.
-    // C: mraot550nm = (raot550nm / normext[iband*NPRES*NAOT+3]) * pow(lambda[ib]*lambda_sf, -eps)
-    let lambda_sf: f64 = 1.0 / 0.55;
-    let mraot550nm = if eps < 0.0 || iband > max_band_idx {
-        raot550nm
+    let lambda_sf: f32 = 1.0f32 / 0.55f32;
+    let mraot550nm: f32 = if eps < 0.0 || iband > max_band_idx {
+        raot550nm as f32
     } else {
         let normext_idx = iband * NPRES_VALS * NAOT_VALS + 3;
-        let normext_val = if normext_idx < lut.normext.len() {
-            lut.normext[normext_idx]
+        let normext_val: f32 = if normext_idx < lut.normext.len() {
+            lut.normext[normext_idx] as f32
         } else {
-            1.0
+            1.0f32
         };
-        (raot550nm / normext_val) * (lambda[iband] * lambda_sf).powf(-eps)
+        (raot550nm as f32 / normext_val)
+            * (lambda[iband] as f32 * lambda_sf).powf(-(eps as f32))
     };
 
     // Normalised atmospheric pressure
-    let atm_pres = pressure * ONE_DIV_ATMOS_PRES_0;
+    let atm_pres: f32 = (pressure * ONE_DIV_ATMOS_PRES_0) as f32;
 
     // Rayleigh optical depth scaled to surface pressure
-    let xtaur = tauray_band * atm_pres;
+    let xtaur: f32 = (tauray_band as f32) * atm_pres;
 
-    // Rayleigh scattering reflectance
-    let xrorayp = rayleigh_reflectance(xfi, xmuv, xmus, xtaur);
+    // Rayleigh scattering reflectance (computed in f64, truncated to f32)
+    let xrorayp: f32 = rayleigh_reflectance(xfi, xmuv, xmus, xtaur as f64) as f32;
 
     // Find pressure and AOT indices into the LUT using modified AOT
-    let indices: LutIndices = lut.find_indices(pressure, mraot550nm);
+    let indices: LutIndices = lut.find_indices(pressure, mraot550nm as f64);
 
-    // Interpolate atmospheric quantities from LUT using modified AOT
-    let satm = lut.interp_spherical_albedo(&indices, iband, pressure, mraot550nm);
-    let roatm_raw = lut.interp_atmospheric_reflectance(
-        &indices, iband, pressure, mraot550nm, xts, xtv, xmus, xmuv, cosxfi,
-    );
+    // Interpolate atmospheric quantities from LUT, truncated to f32
+    let satm: f32 = lut.interp_spherical_albedo(&indices, iband, pressure, mraot550nm as f64) as f32;
+    let roatm_raw: f32 = lut.interp_atmospheric_reflectance(
+        &indices, iband, pressure, mraot550nm as f64, xts, xtv, xmus, xmuv, cosxfi,
+    ) as f32;
 
     // Downward and upward transmittances, then total atmospheric transmittance
-    let xtts = lut.interp_transmission(&indices, iband, pressure, mraot550nm, xts);
-    let xttv = lut.interp_transmission(&indices, iband, pressure, mraot550nm, xtv);
-    let ttatm = xtts * xttv;
+    let xtts: f32 = lut.interp_transmission(&indices, iband, pressure, mraot550nm as f64, xts) as f32;
+    let xttv: f32 = lut.interp_transmission(&indices, iband, pressure, mraot550nm as f64, xtv) as f32;
+    let ttatm: f32 = xtts * xttv;
 
-    // Gas transmissions
-    let gt = compute_gas_transmission(gas_coeff, xmus, xmuv, uoz, uwv, atm_pres);
+    // Gas transmissions (computed in f64, truncated to f32)
+    let gt = compute_gas_transmission(gas_coeff, xmus, xmuv, uoz, uwv, atm_pres as f64);
+    let tgo: f32 = gt.tgo as f32;
+    let tgwv: f32 = gt.tgwv as f32;
+    let tgwvhalf: f32 = gt.tgwvhalf as f32;
 
     // Apply water-vapour half-path correction to atmospheric reflectance
-    let roatm_corrected = (roatm_raw - xrorayp) * gt.tgwvhalf + xrorayp;
+    let roatm_corrected: f32 = (roatm_raw - xrorayp) * tgwvhalf + xrorayp;
 
     // Total transmittance including gas absorption
-    let ttatmg = ttatm * gt.tgwv;
+    let ttatmg: f32 = ttatm * tgwv;
 
     // Solve for surface reflectance
-    let xroslamb = rotoa / gt.tgo - roatm_corrected;
-    let roslamb = xroslamb / (ttatmg + satm * xroslamb);
+    let xroslamb: f32 = rotoa as f32 / tgo - roatm_corrected;
+    let roslamb: f32 = xroslamb / (ttatmg + satm * xroslamb);
 
     AtmCorrResult {
-        roslamb,
-        tgo: gt.tgo,
-        roatm: roatm_corrected,
-        ttatmg,
-        satm,
-        xrorayp,
+        roslamb: roslamb as f64,
+        tgo: tgo as f64,
+        roatm: roatm_corrected as f64,
+        ttatmg: ttatmg as f64,
+        satm: satm as f64,
+        xrorayp: xrorayp as f64,
     }
 }
 

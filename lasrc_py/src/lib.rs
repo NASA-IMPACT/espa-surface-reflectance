@@ -38,19 +38,21 @@ impl PyLookupTables {
                 tts.len()
             )));
         }
-        let mut tts_arr = [0.0f64; NSOLAR_ZEN_VALS];
-        tts_arr.copy_from_slice(&tts);
+        let mut tts_arr = [0.0f32; NSOLAR_ZEN_VALS];
+        for (i, &v) in tts.iter().enumerate() {
+            tts_arr[i] = v as f32;
+        }
         Ok(Self {
             inner: LookupTables {
-                rolutt,
-                transt,
-                sphalbt,
-                normext,
-                tsmax,
-                tsmin,
-                nbfic,
+                rolutt: rolutt.iter().map(|&v| v as f32).collect(),
+                transt: transt.iter().map(|&v| v as f32).collect(),
+                sphalbt: sphalbt.iter().map(|&v| v as f32).collect(),
+                normext: normext.iter().map(|&v| v as f32).collect(),
+                tsmax: tsmax.iter().map(|&v| v as f32).collect(),
+                tsmin: tsmin.iter().map(|&v| v as f32).collect(),
+                nbfic: nbfic.iter().map(|&v| v as f32).collect(),
                 nbfi,
-                ttv,
+                ttv: ttv.iter().map(|&v| v as f32).collect(),
                 tts: tts_arr,
                 indts,
                 nsr_bands,

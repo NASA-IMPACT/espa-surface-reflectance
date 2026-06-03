@@ -85,10 +85,19 @@ pub fn utm_to_deg(space_def: &SpaceDef, line: i32, samp: i32) -> (f64, f64) {
 /// - `xmuv`: cosine of view zenith angle
 /// - `cosxfi`: cosine of relative azimuth angle
 pub fn scattering_angle(xmus: f64, xmuv: f64, cosxfi: f64) -> f64 {
-    let cscaa = -xmus * xmuv
-        - cosxfi * (1.0 - xmus * xmus).sqrt() * (1.0 - xmuv * xmuv).sqrt();
+    // C: float cscaa = -xmus * xmuv - cosxfi * sqrt(1.0 - xmus*xmus) * sqrt(1.0 - xmuv*xmuv);
+    // xmus, xmuv, cosxfi are float; sqrt is double; cscaa is float (truncated)
+    // scaa = acos(cscaa) * RAD2DEG; — acos is double, scaa is float (truncated)
+    let xmus_f = xmus as f32;
+    let xmuv_f = xmuv as f32;
+    let cosxfi_f = cosxfi as f32;
+    let cscaa: f32 = (-(xmus_f as f64) * xmuv_f as f64
+        - cosxfi_f as f64
+            * (1.0 - xmus_f as f64 * xmus_f as f64).sqrt()
+            * (1.0 - xmuv_f as f64 * xmuv_f as f64).sqrt()) as f32;
     let cscaa = cscaa.clamp(-1.0, 1.0);
-    cscaa.acos() * RAD2DEG
+    let scaa: f32 = ((cscaa as f64).acos() * RAD2DEG) as f32;
+    scaa as f64
 }
 
 #[cfg(test)]

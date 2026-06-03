@@ -41,30 +41,42 @@ pub fn compute_gas_transmission(
     uwv: f64,
     atm_pres: f64,
 ) -> GasTransmission {
-    let m = 1.0 / xmus + 1.0 / xmuv;
+    // C: float m = 1.0 / xmus + 1.0 / xmuv;
+    // 1.0 is double, xmus is float, so division is double, sum is double,
+    // but m is stored as float.
+    let m: f32 = (1.0 / xmus + 1.0 / xmuv) as f32;
 
-    // Ozone transmission
-    let tgoz = (coeff.oztransa * m * uoz).exp();
+    // C: *tgoz = exp(oztransa[iband] * m * uoz);
+    // oztransa is double, m and uoz are float — promotes to double for exp
+    let tgoz = (coeff.oztransa * m as f64 * uoz).exp();
 
-    // Water vapor transmission (full path)
-    let x = m * uwv;
-    let tgwv = if x > 1e-06 {
-        (-coeff.wvtransa * x.powf(coeff.wvtransb)).exp()
+    // C: float x = m * uwv; float a = wvtransa; float b = wvtransb;
+    let x: f32 = m * uwv as f32;
+    let a: f32 = coeff.wvtransa as f32;
+    let b: f32 = coeff.wvtransb as f32;
+
+    // C: *tgwv = exp(-a * pow(x, b));
+    // a, x, b are float, pow is double, exp is double
+    let tgwv = if x as f64 > 1e-06 {
+        (-(a as f64) * (x as f64).powf(b as f64)).exp()
     } else {
         1.0
     };
 
-    // Water vapor transmission (solar half-path only)
-    let xhalf = uwv / xmus;
-    let tgwvhalf = if xhalf > 1e-06 {
-        (-coeff.wvtransa * xhalf.powf(coeff.wvtransb)).exp()
+    // C: x *= 0.5; *tgwvhalf = exp(-a * pow(x, b));
+    let xhalf: f32 = x * 0.5f32;
+    let tgwvhalf = if xhalf as f64 > 1e-06 {
+        (-(a as f64) * (xhalf as f64).powf(b as f64)).exp()
     } else {
         1.0
     };
 
-    // Other gas transmission
-    let exponent = (-(coeff.ogtransb0 + coeff.ogtransb1 * atm_pres)).exp();
-    let tgog = (-(coeff.ogtransa1 * atm_pres) * m.powf(exponent)).exp();
+    // C: *tgog = -(ogtransa1[iband] * atm_pres) * pow(m, exp(-(ogtransb0[iband] + ogtransb1[iband] * atm_pres)));
+    // *tgog = exp(*tgog);
+    // Note: atm_pres is float in C
+    let atm_pres_f = atm_pres as f32;
+    let exponent = (-(coeff.ogtransb0 + coeff.ogtransb1 * atm_pres_f as f64)).exp();
+    let tgog = (-(coeff.ogtransa1 * atm_pres_f as f64) * (m as f64).powf(exponent)).exp();
 
     let tgo = tgog * tgoz;
 

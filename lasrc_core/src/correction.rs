@@ -258,11 +258,12 @@ fn precompute_coefficients(
                 tgo_band = result.tgo;
             }
             // Save climatological params at iaot=1 (AOT=0.05)
+            // C: btgo/broatm/bttatmg/bsatm are float[] — truncate to f32
             if iaot == 1 {
-                btgo.push(result.tgo);
-                broatm.push(result.roatm);
-                bttatmg.push(result.ttatmg);
-                bsatm.push(result.satm);
+                btgo.push(result.tgo as f32 as f64);
+                broatm.push(result.roatm as f32 as f64);
+                bttatmg.push(result.ttatmg as f32 as f64);
+                bsatm.push(result.satm as f32 as f64);
             }
         }
 
@@ -297,15 +298,17 @@ fn precompute_coefficients(
             satm_coef,
         });
 
-        tgo_arr.push(tgo_band);
+        // C: float tgo_arr[] — truncate to f32 precision
+        tgo_arr.push(tgo_band as f32 as f64);
 
         // Extract normext at reference pressure index (ip=0) and reference AOT (iaot=3)
         // normext layout: [iband * NPRES_VALS * NAOT_VALS + ip * NAOT_VALS + iaot]
+        // C: float normext_p0a3_arr[] — truncate to f32 precision
         let ip_ref = 0;
         let iaot_ref = 3;
         let normext_idx = iband * NPRES_VALS * NAOT_VALS + ip_ref * NAOT_VALS + iaot_ref;
         let ne = if normext_idx < lut.normext.len() {
-            lut.normext[normext_idx]
+            lut.normext[normext_idx] as f32 as f64
         } else {
             1.0
         };
@@ -395,9 +398,10 @@ pub fn compute_surface_reflectance(
     let roatm_ia_max: Vec<f64> = atm_coeff.iter().map(|c| c.roatm_upper).collect();
 
     // ── Step 3: Allocate working arrays ──
+    // C: float *taero, float *teps — use f32 to match
     let npix = nlines * nsamps;
-    let mut taero = vec![DEFAULT_AERO; npix];
-    let mut teps = vec![DEFAULT_EPS; npix];
+    let mut taero = vec![DEFAULT_AERO as f32; npix];
+    let mut teps = vec![DEFAULT_EPS as f32; npix];
     let mut ipflag = vec![0u8; npix];
 
     // Flatten QA band for 1D access
@@ -418,8 +422,9 @@ pub fn compute_surface_reflectance(
     //
     // This MUST be computed before the aerosol retrieval because the
     // retrieval uses climatological SR bands 5 (NIR) and 7 (SWIR2) for NDWI.
-    let mut sband: Vec<Vec<f64>> = (0..nbands)
-        .map(|_| vec![0.0f64; npix])
+    // C: float **sband — use f32 to match
+    let mut sband: Vec<Vec<f32>> = (0..nbands)
+        .map(|_| vec![0.0f32; npix])
         .collect();
 
     for iline in 0..nlines {
@@ -437,18 +442,19 @@ pub fn compute_surface_reflectance(
             let xmus = (solar_zenith[(iline, isamp)] as f64 * DEG2RAD).cos();
 
             for iband in 0..nbands {
-                // TOA / cos(SZA), clamped to valid range
+                // C: sband[ib][i] = toa / cos(sza) — float
                 let raw_toa = toa_bands[iband][(iline, isamp)] as f64;
-                let rotoa = (raw_toa / xmus).clamp(MIN_VALID_REFL, MAX_VALID_REFL);
+                let rotoa = (raw_toa / xmus).clamp(MIN_VALID_REFL, MAX_VALID_REFL) as f32;
 
-                // Simplified atmospheric correction using scene-center params
-                let tgo_x_roatm = btgo[iband] * broatm[iband];
-                let tgo_x_ttatmg = btgo[iband] * bttatmg[iband];
-                let roslamb = {
+                // C: float arithmetic throughout climatological correction
+                // tgo_x_roatm = tgo * roatm (float * float = float)
+                let tgo_x_roatm = btgo[iband] as f32 * broatm[iband] as f32;
+                let tgo_x_ttatmg = btgo[iband] as f32 * bttatmg[iband] as f32;
+                let roslamb: f32 = {
                     let num = rotoa - tgo_x_roatm;
-                    num / (tgo_x_ttatmg + bsatm[iband] * num)
+                    num / (tgo_x_ttatmg + bsatm[iband] as f32 * num)
                 };
-                sband[iband][pix] = roslamb.clamp(MIN_VALID_REFL, MAX_VALID_REFL);
+                sband[iband][pix] = roslamb.clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32);
             }
         }
     }
@@ -564,8 +570,8 @@ pub fn compute_surface_reflectance(
             let intrb7 = bilerp(int_b7, &cmg.w);
 
             // Compute NDWI from climatological SR bands 5 (NIR) and 7 (SWIR2)
-            let sr_nir = sband[bi.nir][pix];
-            let sr_swir2 = sband[bi.swir2][pix];
+            let sr_nir = sband[bi.nir][pix] as f64;
+            let sr_swir2 = sband[bi.swir2][pix] as f64;
             let sr_swir2_half = sr_swir2 * 0.5;
             let denom = sr_nir + sr_swir2_half;
             let mut xndwi = if denom.abs() > 1.0e-10 {
@@ -587,20 +593,24 @@ pub fn compute_surface_reflectance(
             }
 
             // Initialize erelc and troatm arrays
+            // C: float erelc[NSR_BANDS], float troatm[NSR_BANDS]
+            // Truncate to f32 to match C's float precision
             let mut erelc = vec![-1.0f64; nbands];
             let mut troatm = vec![0.0f64; nbands];
 
             // Compute band ratios from NDWI, slopes, and intercepts
-            erelc[bi.coastal] = xndwi * slprb1 + intrb1;
-            erelc[bi.blue] = xndwi * slprb2 + intrb2;
+            // C stores these in float arrays, so truncate to f32 precision
+            erelc[bi.coastal] = (xndwi * slprb1 + intrb1) as f32 as f64;
+            erelc[bi.blue] = (xndwi * slprb2 + intrb2) as f32 as f64;
             erelc[bi.red] = 1.0;
-            erelc[bi.swir2] = xndwi * slprb7 + intrb7;
+            erelc[bi.swir2] = (xndwi * slprb7 + intrb7) as f32 as f64;
 
             // Set TOA reflectance values for the needed bands
-            troatm[bi.coastal] = toa_over_cos(bi.coastal);
-            troatm[bi.blue] = toa_over_cos(bi.blue);
-            troatm[bi.red] = toa_over_cos(bi.red);
-            troatm[bi.swir2] = toa_over_cos(bi.swir2);
+            // C: troatm[] is float, so truncate
+            troatm[bi.coastal] = toa_over_cos(bi.coastal) as f32 as f64;
+            troatm[bi.blue] = toa_over_cos(bi.blue) as f32 as f64;
+            troatm[bi.red] = toa_over_cos(bi.red) as f32 as f64;
+            troatm[bi.swir2] = toa_over_cos(bi.swir2) as f32 as f64;
 
             // === Eps optimization: 3 retrievals at eps1=1.0, eps2=1.75, eps3=2.5 ===
             let mut iaots = 0usize;
@@ -652,8 +662,8 @@ pub fn compute_surface_reflectance(
                 (eps3, sraot3, residual3)
             };
 
-            teps[pix] = eps;
-            taero[pix] = raot;
+            teps[pix] = eps as f32;
+            taero[pix] = raot as f32;
 
             // corf = raot / xmus_center for !use_orig_aero
             let corf = raot / xmus_center;
@@ -690,12 +700,12 @@ pub fn compute_surface_reflectance(
                 water_erelc[bi.nir] = 1.0;
                 water_erelc[bi.swir2] = 1.0;
 
-                // Water TOA values
+                // Water TOA values (C: float troatm[])
                 let mut water_troatm = vec![0.0f64; nbands];
-                water_troatm[bi.coastal] = toa_over_cos(bi.coastal);
-                water_troatm[bi.red] = toa_over_cos(bi.red);
-                water_troatm[bi.nir] = toa_over_cos(bi.nir);
-                water_troatm[bi.swir2] = toa_over_cos(bi.swir2);
+                water_troatm[bi.coastal] = toa_over_cos(bi.coastal) as f32 as f64;
+                water_troatm[bi.red] = toa_over_cos(bi.red) as f32 as f64;
+                water_troatm[bi.nir] = toa_over_cos(bi.nir) as f32 as f64;
+                water_troatm[bi.swir2] = toa_over_cos(bi.swir2) as f32 as f64;
 
                 let water_result = subaeroret_new(
                     true, iband1, &water_erelc, &water_troatm,
@@ -703,8 +713,8 @@ pub fn compute_surface_reflectance(
                     &satm_coef, &normext_p0a3, lambda, WATER_EPS, 0, tth_water,
                 );
 
-                teps[pix] = WATER_EPS;
-                taero[pix] = water_result.raot;
+                teps[pix] = WATER_EPS as f32;
+                taero[pix] = water_result.raot as f32;
                 let water_corf = water_result.raot / xmus_center;
 
                 // Validate: check band 1 reflectance
@@ -779,16 +789,20 @@ pub fn compute_surface_reflectance(
                 continue;
             }
 
-            let raot = taero[pix];
-            let eps = teps[pix];
+            let raot = taero[pix] as f64;
+            let eps = teps[pix] as f64;
 
             for iband in 0..nbands {
                 // Reconstruct TOA from climatological SR
-                let rsurf = sband[iband][pix];
-                let rotoa = (rsurf * bttatmg[iband]
-                    / (1.0 - bsatm[iband] * rsurf)
+                // C: float rsurf, float rotoa
+                // C: rotoa = (rsurf * bttatmg[ib] / (1.0 - bsatm[ib] * rsurf) + broatm[ib]) * btgo[ib]
+                // Note: C literal 1.0 is double, so the division happens in double,
+                // but rotoa is float so the result is truncated.
+                let rsurf = sband[iband][pix]; // f32
+                let rotoa: f32 = ((rsurf as f64 * bttatmg[iband]
+                    / (1.0 - bsatm[iband] * rsurf as f64)
                     + broatm[iband])
-                    * btgo[iband];
+                    * btgo[iband]) as f32;
 
                 let roslamb = atmcorlamb2_new(
                     &atm_coeff[iband],
@@ -796,7 +810,7 @@ pub fn compute_surface_reflectance(
                     iband,
                     raot,
                     normext_p0a3[iband],
-                    rotoa,
+                    rotoa as f64,
                     lambda,
                     eps,
                 );
@@ -809,7 +823,7 @@ pub fn compute_surface_reflectance(
                 // using |rsurf - roslamb| as the aerosol level indicator.
                 // Matches C code compute_landsat_refl.c lines 1758-1780.
                 if iband == bi.coastal {
-                    let tmpf = (rsurf - roslamb).abs();
+                    let tmpf = (rsurf as f64 - roslamb).abs();
                     if tmpf <= LOW_AERO_THRESH {
                         // Low aerosol: set AERO1 only
                         ipflag[pix] |= 1u8 << AERO1_QA;
@@ -826,6 +840,11 @@ pub fn compute_surface_reflectance(
     }
 
     // ── Step 8: Scale to output integers ──
+    // C uses float (f32) arithmetic for output scaling:
+    //   float tmpf = (sband[band][pix] + offset_value) * mult_value;
+    //   out_band[pix] = roundf(tmpf);
+    let offset_f32 = BAND_OFFSET_REFL as f32;
+    let mult_f32 = MULT_FACTOR_REFL as f32;
     let sr_bands: Vec<Array2<u16>> = sr_f32
         .iter()
         .map(|band| {
@@ -834,9 +853,9 @@ pub fn compute_surface_reflectance(
                 if is_fill_pixel(qa_flat[pix]) {
                     0u16
                 } else {
-                    ((band[(i, j)] + BAND_OFFSET_REFL) * MULT_FACTOR_REFL)
-                        .round()
-                        .clamp(0.0, u16::MAX as f64) as u16
+                    let sband_f32 = band[(i, j)] as f32;
+                    let tmpf = (sband_f32 + offset_f32) * mult_f32;
+                    tmpf.round().clamp(0.0, u16::MAX as f32) as u16
                 }
             })
         })
@@ -861,14 +880,15 @@ pub fn compute_surface_reflectance(
         .collect();
 
     // Scale aerosol to int16 (valid range [0, 5000], fill = -9999)
+    // C uses float arithmetic: tmpf = (aero[pix] + 0.0f) * 1000.0f; roundf(tmpf)
+    let aero_mult_f32 = MULT_FACTOR_AERO as f32;
     let aerosol = Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
         let pix = i * nsamps + j;
         if is_fill_pixel(qa_flat[pix]) {
             AERO_FILL
         } else {
-            (taero[pix] * MULT_FACTOR_AERO)
-                .round()
-                .clamp(0.0, 5000.0) as i16
+            let tmpf = taero[pix] * aero_mult_f32;
+            tmpf.round().clamp(0.0, 5000.0) as i16
         }
     });
 

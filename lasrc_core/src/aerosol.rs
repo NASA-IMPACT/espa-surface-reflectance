@@ -60,26 +60,33 @@ pub fn subaeroret_new(
 ) -> AerosolResult {
     let nband = erelc.len();
 
-    // Helper to compute atmospheric correction for one band
-    let atm_corr = |ib: usize, raot: f64| -> f64 {
+    // Helper to compute atmospheric correction for one band.
+    // Returns f32 roslamb matching C's `float roslamb`.
+    let atm_corr = |ib: usize, raot: f32| -> f32 {
         let coeff = AtmCorrCoefficients {
             roatm_upper: roatm_ia_max[ib],
             roatm_coef: roatm_coef[ib],
             ttatmg_coef: ttatmg_coef[ib],
             satm_coef: satm_coef[ib],
         };
-        atmcorlamb2_new(&coeff, tgo_arr[ib], ib, raot, normext_p0a3[ib], troatm[ib], lambda, eps)
+        // atmcorlamb2_new already uses f32 internally and returns f64;
+        // truncate back to f32 to match C's `float roslamb`.
+        atmcorlamb2_new(&coeff, tgo_arr[ib], ib, raot as f64, normext_p0a3[ib], troatm[ib], lambda, eps) as f32
     };
 
     // Helper to compute residual at a given raot550nm value.
-    // Returns (residual, ros1, testth).
-    // testth is true if ANY band's corrected reflectance falls below tth[ib].
-    let compute_residual = |raot: f64| -> (f64, f64, bool) {
-        // Reference band correction
-        let ros1 = atm_corr(iband1, raot);
-        let mut testth = ros1 - tth[iband1] < 0.0;
+    // Returns (residual_f32, ros1_f64, testth).
+    //
+    // C precision: roslamb is float, ros1 is double, *residual is float,
+    // point_error is double, erelc[] is float.
+    let compute_residual = |raot: f32| -> (f32, f64, bool) {
+        // Reference band correction — roslamb is float, ros1 is double
+        let roslamb = atm_corr(iband1, raot);
+        let mut testth = (roslamb as f64) - tth[iband1] < 0.0;
+        let ros1: f64 = roslamb as f64; // C: double ros1 = (float)roslamb
 
-        let mut residual = 0.0;
+        // C: *residual is float — accumulate into f32
+        let mut residual: f32 = 0.0;
         let mut nbval = 0usize;
 
         // For water: include iband1 in loop. For land: skip iband1.
@@ -87,9 +94,10 @@ pub fn subaeroret_new(
             for ib in 0..nband {
                 if erelc[ib] > 0.0 {
                     let roslamb = atm_corr(ib, raot);
-                    if roslamb - tth[ib] < 0.0 {
+                    if (roslamb as f64) - tth[ib] < 0.0 {
                         testth = true;
                     }
+                    // C: *residual += roslamb*roslamb (float += float*float)
                     residual += roslamb * roslamb;
                     nbval += 1;
                 }
@@ -99,24 +107,29 @@ pub fn subaeroret_new(
                 // C: if (ib != iband1 && erelc[ib] > 0.0)
                 if ib != iband1 && erelc[ib] > 0.0 {
                     let roslamb = atm_corr(ib, raot);
-                    if roslamb - tth[ib] < 0.0 {
+                    if (roslamb as f64) - tth[ib] < 0.0 {
                         testth = true;
                     }
-                    let diff = roslamb - erelc[ib] * ros1;
-                    residual += diff * diff;
+                    // C: point_error = roslamb - erelc[ib] * ros1 (double)
+                    // roslamb is float promoted to double, erelc[ib] is float promoted to double
+                    let point_error: f64 = roslamb as f64 - (erelc[ib] as f32 as f64) * ros1;
+                    // C: *residual += point_error * point_error (float += double)
+                    residual += (point_error * point_error) as f32;
                     nbval += 1;
                 }
             }
         }
 
         if nbval > 0 {
-            residual = residual.sqrt() / nbval as f64;
+            // C: *residual = sqrt(*residual) / nbval
+            // sqrt promotes float to double, divides, truncates back to float
+            residual = ((residual as f64).sqrt() / nbval as f64) as f32;
         }
 
         (residual, ros1, testth)
     };
 
-    // C variables: residual1 = 2000, residual2 = 1000
+    // C variables: residual1/2 are double, raot1/2 are double
     let mut residual1 = 2000.0f64;
     let mut residual2 = 1000.0f64;
     let mut iaot1 = 0usize;
@@ -125,23 +138,26 @@ pub fn subaeroret_new(
     let mut raot2 = 1.0e-6f64;
 
     // First iteration at iaots
+    // C: float raot550nm = aot550nm[iaot]
     let mut iaot = iaots;
-    let mut raot550nm = AOT550NM[iaot];
+    let mut raot550nm: f32 = AOT550NM[iaot] as f32;
     let (mut residual, _ros1, mut testth) = compute_residual(raot550nm);
 
     // Convergence loop: increment iaot, stop when residual starts increasing
-    // or testth is triggered. Matches C: while ((iaot < NAOT_VALS) && (*residual < residual1) && (!testth))
+    // or testth is triggered.
+    // C: while ((iaot < NAOT_VALS) && (*residual < residual1) && (!testth))
+    // Note: *residual is float, residual1 is double — C promotes float to double for comparison
     iaot += 1;
-    while iaot < NAOT_VALS && residual < residual1 && !testth {
-        // Shift history
+    while iaot < NAOT_VALS && (residual as f64) < residual1 && !testth {
+        // Shift history: residual1/2 are double, store float-precision residual promoted to double
         residual2 = residual1;
         iaot2 = iaot1;
         raot2 = raot1;
-        residual1 = residual;
-        raot1 = raot550nm;
+        residual1 = residual as f64; // C: residual1 = *residual (float→double)
+        raot1 = raot550nm as f64;    // C: raot1 = raot550nm (float→double)
         iaot1 = iaot;
 
-        raot550nm = AOT550NM[iaot];
+        raot550nm = AOT550NM[iaot] as f32;
         let (new_res, _ros1, new_testth) = compute_residual(raot550nm);
         residual = new_res;
         testth = new_testth;
@@ -150,55 +166,62 @@ pub fn subaeroret_new(
     }
 
     // Parabolic refinement
-    let mut final_raot;
-    let final_residual;
+    // C: *raot and raotsaved are float; xa, xb, raotmin are double; residualm is double
+    let mut final_raot: f32;
+    let final_residual: f64;
     let final_iaots;
 
     if iaot <= 1 {
         // No convergence achieved — use the current AOT value
+        // C: if (iaot == 1) { *raot = raot550nm; }
         final_raot = raot550nm;
-        final_residual = residual;
+        final_residual = residual as f64;
         final_iaots = if iaots > 3 { iaots - 3 } else { 0 };
     } else {
         // C: *raot = raot550nm; raotsaved = *raot;
         final_raot = raot550nm;
-        let raotsaved = final_raot;
+        let raotsaved: f32 = final_raot;
 
-        // 3-point quadratic fit: (raot2,residual2), (raot1,residual1), (raot550nm,residual)
-        let xa_fit = (residual1 - residual) * (raot2 - raot550nm);
-        let xb_fit = (residual2 - residual) * (raot1 - raot550nm);
+        // 3-point quadratic fit using double precision (matching C's double xa, xb, raotmin)
+        // C: xa = (residual1 - *residual)*(raot2 - *raot)
+        // *residual is float (promoted to double), *raot is float (promoted to double)
+        let xa_fit = (residual1 - residual as f64) * (raot2 - final_raot as f64);
+        let xb_fit = (residual2 - residual as f64) * (raot1 - final_raot as f64);
         let denom = xa_fit - xb_fit;
         let raotmin = if denom.abs() > 1e-20 {
-            0.5 * (xa_fit * (raot2 + raot550nm) - xb_fit * (raot1 + raot550nm)) / denom
+            0.5 * (xa_fit * (raot2 + final_raot as f64) - xb_fit * (raot1 + final_raot as f64)) / denom
         } else {
-            final_raot
+            final_raot as f64
         };
 
         let raotmin = if raotmin < 0.01 || raotmin > 4.0 {
-            final_raot
+            final_raot as f64
         } else {
             raotmin
         };
 
         // Evaluate residual at the parabolic minimum
-        let (residualm, _ros1, _testth) = compute_residual(raotmin);
-        let mut best_res = residualm;
-        final_raot = raotmin;
+        // C: raot550nm = raotmin (double→float truncation)
+        let (residualm_f32, _ros1, _testth) = compute_residual(raotmin as f32);
+        let mut residualm: f64 = residualm_f32 as f64;
+        // C: *raot = raot550nm (which is raotmin truncated to float)
+        final_raot = raotmin as f32;
 
         // Compare against the three stored values and pick the best
-        if best_res > residual {
-            best_res = residual;
+        // C: if (residualm > *residual) { residualm = *residual; *raot = raotsaved; }
+        if residualm > residual as f64 {
+            residualm = residual as f64;
             final_raot = raotsaved;
         }
-        if best_res > residual1 {
-            best_res = residual1;
-            final_raot = raot1;
+        if residualm > residual1 {
+            residualm = residual1;
+            final_raot = raot1 as f32; // C: *raot = raot1 (double→float)
         }
-        if best_res > residual2 {
-            best_res = residual2;
-            final_raot = raot2;
+        if residualm > residual2 {
+            residualm = residual2;
+            final_raot = raot2 as f32; // C: *raot = raot2 (double→float)
         }
-        final_residual = best_res;
+        final_residual = residualm;
 
         // C: *iaots = MAX((iaot2 - 3), 0)
         // Special case for water: if iaot == 1, iaots = 0
@@ -210,7 +233,7 @@ pub fn subaeroret_new(
     }
 
     AerosolResult {
-        raot: final_raot,
+        raot: final_raot as f64,
         residual: final_residual,
         eps,
         iaots: final_iaots,
@@ -229,7 +252,7 @@ pub fn subaeroret_new(
 /// in if any surrounding center was water.  Fill pixels are cleaned up at the
 /// end to have only `IPFLAG_FILL`.
 pub fn aerosol_interp(
-    data: &mut [f64],
+    data: &mut [f32],
     ipflag: &mut [u8],
     qa_band: &[u16],
     nlines: usize,
@@ -246,8 +269,9 @@ pub fn aerosol_interp(
             + half_aero_window;
 
         // Fractional distance and neighbor line
-        let yaero = (line as f64 - center_line as f64) * aero_step;
-        let u_signed = yaero - (yaero as i32) as f64; // C: yaero - (int)yaero
+        // C: float yaero, xaero — use f32 to match
+        let yaero = ((line as f64 - center_line as f64) * aero_step) as f32;
+        let u_signed = yaero - (yaero as i32) as f32; // C: yaero - (int)yaero
         let center_line1 = if u_signed < 0.0 {
             if center_line >= aero_window {
                 center_line - aero_window
@@ -262,7 +286,7 @@ pub fn aerosol_interp(
                 cl1
             }
         };
-        let u = u_signed.abs();
+        let u: f32 = u_signed.abs();
 
         for samp in 0..nsamps {
             let pix = line * nsamps + samp;
@@ -281,9 +305,9 @@ pub fn aerosol_interp(
                 continue;
             }
 
-            // Fractional distance and neighbor sample
-            let xaero = (samp as f64 - center_samp as f64) * aero_step;
-            let v_signed = xaero - (xaero as i32) as f64;
+            // Fractional distance and neighbor sample (C: float xaero)
+            let xaero = ((samp as f64 - center_samp as f64) * aero_step) as f32;
+            let v_signed = xaero - (xaero as i32) as f32;
             let center_samp1 = if v_signed < 0.0 {
                 if center_samp >= aero_window {
                     center_samp - aero_window
@@ -298,7 +322,7 @@ pub fn aerosol_interp(
                     cs1
                 }
             };
-            let v = v_signed.abs();
+            let v: f32 = v_signed.abs();
 
             // Four corner center pixels
             let pix11 = center_line * nsamps + center_samp;
@@ -306,7 +330,7 @@ pub fn aerosol_interp(
             let pix21 = center_line1 * nsamps + center_samp;
             let pix22 = center_line1 * nsamps + center_samp1;
 
-            // Bilinear interpolation (unconditional — no ipflag check on corners)
+            // Bilinear interpolation in f32 (C: float arithmetic on float arrays)
             let a11 = data[pix11];
             let a12 = data[pix12];
             let a21 = data[pix21];
@@ -364,8 +388,8 @@ pub fn aerosol_interp(
 /// * `half_fix_aero_window` - Half of fix window
 /// * `min_clear_pix`        - Minimum number of clear neighbors required in pass 1
 pub fn fix_invalid_aerosols(
-    taero: &mut [f64],
-    teps: &mut [f64],
+    taero: &mut [f32],
+    teps: &mut [f32],
     ipflag: &[u8],
     nlines: usize,
     nsamps: usize,
@@ -387,8 +411,8 @@ pub fn fix_invalid_aerosols(
     let fill_pass = |forward: bool,
                      required_clear: usize,
                      use_filled: bool,
-                     taero: &mut [f64],
-                     teps: &mut [f64],
+                     taero: &mut [f32],
+                     teps: &mut [f32],
                      smflag: &mut [bool]| {
         let (start_line, start_samp, step_val): (isize, isize, isize) = if forward {
             (half_aero_window as isize, half_aero_window as isize, step)
@@ -422,8 +446,8 @@ pub fn fix_invalid_aerosols(
                 }
 
                 // Search WxW window around current center pixel, stepping by aero_window
-                let mut sum_aero = 0.0;
-                let mut sum_eps = 0.0;
+                let mut sum_aero: f32 = 0.0;
+                let mut sum_eps: f32 = 0.0;
                 let mut nbclrpix = 0usize;
 
                 let mut iline = line - window_offset;
@@ -455,12 +479,12 @@ pub fn fix_invalid_aerosols(
                 }
 
                 if nbclrpix >= required_clear {
-                    taero[curr_pix] = sum_aero / nbclrpix as f64;
-                    teps[curr_pix] = sum_eps / nbclrpix as f64;
+                    taero[curr_pix] = sum_aero / nbclrpix as f32;
+                    teps[curr_pix] = sum_eps / nbclrpix as f32;
                     smflag[curr_pix] = true;
                 } else {
-                    taero[curr_pix] = DEFAULT_AERO;
-                    teps[curr_pix] = DEFAULT_EPS;
+                    taero[curr_pix] = DEFAULT_AERO as f32;
+                    teps[curr_pix] = DEFAULT_EPS as f32;
                 }
 
                 samp += step_val;
@@ -510,8 +534,8 @@ mod tests {
         let nlines = 9;
         let nsamps = 9;
         let npix = nlines * nsamps;
-        let mut taero = vec![0.0f64; npix];
-        let mut teps = vec![0.0f64; npix];
+        let mut taero = vec![0.0f32; npix];
+        let mut teps = vec![0.0f32; npix];
         let mut ipflag = vec![0u8; npix];
         let qa_band = vec![2u16; npix]; // bit 0 = 0 means not fill
         for i in (1..nlines).step_by(3) {
@@ -534,8 +558,8 @@ mod tests {
         let nlines = 9;
         let nsamps = 9;
         let npix = nlines * nsamps;
-        let mut taero = vec![0.0f64; npix];
-        let mut teps = vec![0.0f64; npix];
+        let mut taero = vec![0.0f32; npix];
+        let mut teps = vec![0.0f32; npix];
         let mut ipflag = vec![0u8; npix];
         // Set some valid centers (aero_window=3, half=1, so centers at 1,4,7)
         for i in (1..nlines).step_by(3) {
