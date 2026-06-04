@@ -446,8 +446,9 @@ pub fn fix_invalid_aerosols(
                 }
 
                 // Search WxW window around current center pixel, stepping by aero_window
-                let mut sum_aero: f32 = 0.0;
-                let mut sum_eps: f32 = 0.0;
+                // C uses double for sum accumulators
+                let mut sum_aero: f64 = 0.0;
+                let mut sum_eps: f64 = 0.0;
                 let mut nbclrpix = 0usize;
 
                 let mut iline = line - window_offset;
@@ -470,8 +471,8 @@ pub fn fix_invalid_aerosols(
                             || (use_filled && smflag[ipix])
                         {
                             nbclrpix += 1;
-                            sum_aero += taero[ipix];
-                            sum_eps += teps[ipix];
+                            sum_aero += taero[ipix] as f64;
+                            sum_eps += teps[ipix] as f64;
                         }
                         isamp += step;
                     }
@@ -479,8 +480,10 @@ pub fn fix_invalid_aerosols(
                 }
 
                 if nbclrpix >= required_clear {
-                    taero[curr_pix] = sum_aero / nbclrpix as f32;
-                    teps[curr_pix] = sum_eps / nbclrpix as f32;
+                    // C: taero[curr_pix] = sum_aero / nbclrpix;
+                    // double / int -> double, assigned to float
+                    taero[curr_pix] = (sum_aero / nbclrpix as f64) as f32;
+                    teps[curr_pix] = (sum_eps / nbclrpix as f64) as f32;
                     smflag[curr_pix] = true;
                 } else {
                     taero[curr_pix] = DEFAULT_AERO as f32;
