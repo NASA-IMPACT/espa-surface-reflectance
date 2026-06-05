@@ -3,7 +3,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use lasrc_core::constants::NSOLAR_ZEN_VALS;
-use lasrc_core::correction::{AuxiliaryData, compute_surface_reflectance};
+use lasrc_core::correction::{AuxiliaryData, compute_surface_reflectance, compute_sentinel_surface_reflectance};
 use lasrc_core::geometry::SpaceDef;
 use lasrc_core::lut::LookupTables;
 use lasrc_core::sensor::{Landsat8, Landsat9, Sentinel2A, Sentinel2B, Sentinel2C, Sensor};
@@ -243,11 +243,78 @@ fn process_surface_reflectance<'py>(
     Ok(dict.into())
 }
 
+/// Compute surface reflectance for a Sentinel-2 scene.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn process_sentinel_surface_reflectance<'py>(
+    py: Python<'py>,
+    sensor_name: &str,
+    toa_bands: Vec<PyReadonlyArray2<'py, f32>>,
+    solar_zenith: f64,
+    solar_azimuth: f64,
+    view_zenith: f64,
+    view_azimuth: f64,
+    lut: &PyLookupTables,
+    aux: &PyAuxiliaryData,
+    ul_corner_x: f64,
+    ul_corner_y: f64,
+    pixel_size_x: f64,
+    pixel_size_y: f64,
+    utm_zone: i32,
+) -> PyResult<PyObject> {
+    let sensor: Box<dyn Sensor> = match sensor_name {
+        "SENTINEL_2A" => Box::new(Sentinel2A),
+        "SENTINEL_2B" => Box::new(Sentinel2B),
+        "SENTINEL_2C" => Box::new(Sentinel2C),
+        _ => return Err(PyValueError::new_err(format!(
+            "Unknown Sentinel sensor: {sensor_name}"
+        ))),
+    };
+
+    let toa_views: Vec<_> = toa_bands.iter().map(|a| a.as_array()).collect();
+
+    let space_def = SpaceDef {
+        ul_corner_x,
+        ul_corner_y,
+        pixel_size: [pixel_size_x, pixel_size_y],
+        zone: utm_zone,
+    };
+
+    let result = compute_sentinel_surface_reflectance(
+        sensor.as_ref(),
+        &toa_views,
+        solar_zenith,
+        solar_azimuth,
+        view_zenith,
+        view_azimuth,
+        &lut.inner,
+        &aux.inner,
+        &space_def,
+    );
+
+    let dict = pyo3::types::PyDict::new(py);
+
+    let sr_list: Vec<Bound<'py, PyArray1<u16>>> = result.sr_bands.into_iter().map(|a| {
+        let (v, _) = a.into_raw_vec_and_offset();
+        v.into_pyarray(py)
+    }).collect();
+    dict.set_item("sr_bands", sr_list)?;
+    dict.set_item("bt_bands", Vec::<Bound<'py, PyArray1<u16>>>::new())?;
+
+    let (aerosol_vec, _) = result.aerosol.into_raw_vec_and_offset();
+    dict.set_item("aerosol", aerosol_vec.into_pyarray(py))?;
+    let (qa_vec, _) = result.qa.into_raw_vec_and_offset();
+    dict.set_item("qa", qa_vec.into_pyarray(py))?;
+
+    Ok(dict.into())
+}
+
 #[pymodule]
 fn lasrc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", "0.1.0")?;
     m.add_class::<PyLookupTables>()?;
     m.add_class::<PyAuxiliaryData>()?;
     m.add_function(wrap_pyfunction!(process_surface_reflectance, m)?)?;
+    m.add_function(wrap_pyfunction!(process_sentinel_surface_reflectance, m)?)?;
     Ok(())
 }
