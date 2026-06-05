@@ -3,9 +3,11 @@
 use crate::constants::{
     LAERO_WINDOW, LHALF_AERO_WINDOW, LFIX_AERO_WINDOW, LHALF_FIX_AERO_WINDOW, LMIN_CLEAR_PIX,
     SAERO_WINDOW, SFIX_AERO_WINDOW, SHALF_FIX_AERO_WINDOW, SMIN_CLEAR_PIX,
-    TAURAY_LANDSAT, LAMBDA_LANDSAT, LAMBDA_SENTINEL,
+    TAURAY_LANDSAT, TAURAY_SENTINEL, LAMBDA_LANDSAT, LAMBDA_SENTINEL_ALL,
     OZTRANSA_LANDSAT, WVTRANSA_LANDSAT, WVTRANSB_LANDSAT,
     OGTRANSA1_LANDSAT, OGTRANSB0_LANDSAT, OGTRANSB1_LANDSAT,
+    OZTRANSA_SENTINEL, WVTRANSA_SENTINEL, WVTRANSB_SENTINEL,
+    OGTRANSA1_SENTINEL, OGTRANSB0_SENTINEL, OGTRANSB1_SENTINEL,
 };
 use crate::gas_transmission::GasCoefficients;
 
@@ -79,7 +81,7 @@ const LANDSAT_BAND_INDICES: BandIndices = BandIndices {
 
 // ── Sentinel-2 constants ───────────────────────────────────────────────────
 
-const SENTINEL_REFL_BANDS: [BandConfig; 11] = [
+const SENTINEL_REFL_BANDS: [BandConfig; 13] = [
     BandConfig { name: "B01", wavelength_um: 0.443, native_resolution_m: 60.0 },
     BandConfig { name: "B02", wavelength_um: 0.490, native_resolution_m: 10.0 },
     BandConfig { name: "B03", wavelength_um: 0.560, native_resolution_m: 10.0 },
@@ -89,18 +91,20 @@ const SENTINEL_REFL_BANDS: [BandConfig; 11] = [
     BandConfig { name: "B07", wavelength_um: 0.783, native_resolution_m: 20.0 },
     BandConfig { name: "B08", wavelength_um: 0.842, native_resolution_m: 10.0 },
     BandConfig { name: "B8A", wavelength_um: 0.865, native_resolution_m: 20.0 },
+    BandConfig { name: "B09", wavelength_um: 0.945, native_resolution_m: 60.0 },
+    BandConfig { name: "B10", wavelength_um: 1.375, native_resolution_m: 60.0 },
     BandConfig { name: "B11", wavelength_um: 1.610, native_resolution_m: 20.0 },
     BandConfig { name: "B12", wavelength_um: 2.190, native_resolution_m: 20.0 },
 ];
 
 const SENTINEL_BAND_INDICES: BandIndices = BandIndices {
-    coastal: 0,
-    blue: 1,
-    green: 2,
-    red: 3,
-    nir: 8,   // B8A
-    swir1: 9,
-    swir2: 10,
+    coastal: 0,   // B01
+    blue: 1,      // B02
+    green: 2,     // B03
+    red: 3,       // B04
+    nir: 8,       // B8A (used in NDVI/NDWI)
+    swir1: 11,    // B11
+    swir2: 12,    // B12
 };
 
 // ── Concrete sensor types ──────────────────────────────────────────────────
@@ -119,6 +123,20 @@ pub struct Sentinel2B;
 
 /// Sentinel-2C sensor.
 pub struct Sentinel2C;
+
+/// Build gas coefficient vector for Sentinel bands from hardcoded constants.
+fn sentinel_gas_coefficients() -> Vec<GasCoefficients> {
+    (0..OZTRANSA_SENTINEL.len())
+        .map(|i| GasCoefficients {
+            oztransa: OZTRANSA_SENTINEL[i],
+            wvtransa: WVTRANSA_SENTINEL[i],
+            wvtransb: WVTRANSB_SENTINEL[i],
+            ogtransa1: OGTRANSA1_SENTINEL[i],
+            ogtransb0: OGTRANSB0_SENTINEL[i],
+            ogtransb1: OGTRANSB1_SENTINEL[i],
+        })
+        .collect()
+}
 
 /// Build gas coefficient vector for Landsat bands from hardcoded constants.
 fn landsat_gas_coefficients() -> Vec<GasCoefficients> {
@@ -189,12 +207,10 @@ macro_rules! impl_sentinel_sensor {
             fn half_fix_aerosol_window(&self) -> usize { SHALF_FIX_AERO_WINDOW }
             fn min_clear_pix(&self) -> usize { SMIN_CLEAR_PIX }
             fn band_indices(&self) -> &BandIndices { &SENTINEL_BAND_INDICES }
-            fn tauray(&self) -> &[f64] {
-                todo!("Sentinel Rayleigh values loaded from LUT")
-            }
-            fn lambda(&self) -> &[f64] { &LAMBDA_SENTINEL }
+            fn tauray(&self) -> &[f64] { &TAURAY_SENTINEL }
+            fn lambda(&self) -> &[f64] { &LAMBDA_SENTINEL_ALL }
             fn gas_coefficients(&self) -> Vec<GasCoefficients> {
-                todo!("Sentinel gas coefficients from gascoef-msi.ASC")
+                sentinel_gas_coefficients()
             }
         }
     };
@@ -262,7 +278,7 @@ mod tests {
     #[test]
     fn test_sentinel2a_band_count() {
         let sensor = Sentinel2A;
-        assert_eq!(sensor.reflectance_bands().len(), 11);
+        assert_eq!(sensor.reflectance_bands().len(), 13);
         assert_eq!(sensor.thermal_bands().len(), 0);
     }
 
@@ -287,15 +303,16 @@ mod tests {
         assert_eq!(idx.blue, 1);
         assert_eq!(idx.red, 3);
         assert_eq!(idx.nir, 8);
-        assert_eq!(idx.swir1, 9);
-        assert_eq!(idx.swir2, 10);
+        assert_eq!(idx.swir1, 11);
+        assert_eq!(idx.swir2, 12);
     }
 
     #[test]
     fn test_sentinel2a_lambda() {
         let sensor = Sentinel2A;
-        assert_eq!(sensor.lambda().len(), 11);
+        assert_eq!(sensor.lambda().len(), 13);
         assert!((sensor.lambda()[0] - 0.443).abs() < 1e-5);
+        assert!((sensor.lambda()[12] - 2.190).abs() < 1e-5);
     }
 
     #[test]
@@ -308,6 +325,21 @@ mod tests {
     #[test]
     fn test_num_refl_bands_default_impl() {
         assert_eq!(Landsat8.num_refl_bands(), 8);
-        assert_eq!(Sentinel2A.num_refl_bands(), 11);
+        assert_eq!(Sentinel2A.num_refl_bands(), 13);
+    }
+
+    #[test]
+    fn test_sentinel2a_tauray() {
+        let sensor = Sentinel2A;
+        assert_eq!(sensor.tauray().len(), 13);
+        assert!((sensor.tauray()[0] - 0.23432).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_sentinel2a_gas_coefficients() {
+        let sensor = Sentinel2A;
+        let gc = sensor.gas_coefficients();
+        assert_eq!(gc.len(), 13);
+        assert!((gc[0].oztransa - (-0.00264691)).abs() < 1e-7);
     }
 }
