@@ -5,7 +5,10 @@
 
 use ndarray::{Array2, ArrayView2};
 
-use crate::aerosol::{aerosol_interp, fix_invalid_aerosols, subaeroret_new};
+use crate::aerosol::{
+    aerosol_interp, fix_invalid_aerosols, subaeroret_new,
+    aerosol_interp_sentinel, ipflag_expand_failed_sentinel, aero_avg_failed_sentinel,
+};
 use crate::atmospheric::{atmcorlamb2, atmcorlamb2_new, AtmCorrCoefficients};
 use crate::constants::*;
 use crate::gas_transmission::GasCoefficients;
@@ -885,6 +888,565 @@ pub fn compute_surface_reflectance(
     let aerosol = Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
         let pix = i * nsamps + j;
         if is_fill_pixel(qa_flat[pix]) {
+            AERO_FILL
+        } else {
+            let tmpf = taero[pix] * aero_mult_f32;
+            tmpf.round().clamp(0.0, 5000.0) as i16
+        }
+    });
+
+    // Build QA output
+    let qa = Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
+        let pix = i * nsamps + j;
+        ipflag[pix]
+    });
+
+    SurfaceReflectanceResult {
+        sr_bands,
+        bt_bands: bt_out,
+        aerosol,
+        qa,
+    }
+}
+
+/// Compute surface reflectance for a Sentinel-2 scene.
+///
+/// Similar to `compute_surface_reflectance` (Landsat) but with key differences:
+/// - Scene-center scalar angles (not per-pixel grids)
+/// - Fill detection: ANY band with TOA == 0.0 marks pixel as fill
+/// - TOA is NOT divided by cos(SZA)
+/// - Aerosol window starts at (0,0) stepping by SAERO_WINDOW=6
+/// - TOA averaging within 6x6 windows for aerosol retrieval
+/// - Sentinel-specific eps optimization with resepsmin validation
+/// - B09: atmospheric bypass; B10: copy TOA directly
+/// - Sentinel-specific post-processing functions
+#[allow(clippy::too_many_arguments)]
+pub fn compute_sentinel_surface_reflectance(
+    sensor: &dyn Sensor,
+    toa_bands: &[ArrayView2<f32>],
+    solar_zenith: f64,
+    solar_azimuth: f64,
+    view_zenith: f64,
+    view_azimuth: f64,
+    lut: &LookupTables,
+    aux: &AuxiliaryData,
+    space_def: &SpaceDef,
+) -> SurfaceReflectanceResult {
+    let (nlines, nsamps) = toa_bands[0].dim();
+    let nbands = sensor.num_refl_bands(); // 13
+    let lambda = sensor.lambda();
+    let aero_window = sensor.aerosol_window(); // 6
+    let npix = nlines * nsamps;
+
+    // ── Step 1: Fill detection ──
+    // Any band with value == 0.0 marks pixel as fill
+    let mut qaband = vec![0u16; npix];
+    for pix in 0..npix {
+        let (i, j) = (pix / nsamps, pix % nsamps);
+        for ib in 0..nbands {
+            if toa_bands[ib][(i, j)] == 0.0 {
+                qaband[pix] = 1; // bit 0 = fill
+                break;
+            }
+        }
+    }
+
+    // ── Step 2: Scene-center geometry (scalar angles) ──
+    let xts = solar_zenith;
+    let xtv = view_zenith;
+    let xmus = (xts * DEG2RAD).cos();
+    let xmuv = (xtv * DEG2RAD).cos();
+    let xfi = (view_azimuth - solar_azimuth).abs();
+    let xfi = if xfi > 180.0 { 360.0 - xfi } else { xfi };
+    let cosxfi = (xfi * DEG2RAD).cos();
+
+    // ── Step 3: Scene-center atmospheric state ──
+    let center_line_geo = (nlines / 2) as i32;
+    let center_samp_geo = (nsamps / 2) as i32;
+    let (scene_center_lat, scene_center_lon) =
+        utm_to_deg(space_def, center_line_geo, center_samp_geo);
+    let (pressure, uoz, uwv) = extract_atm_params(aux, scene_center_lat, scene_center_lon);
+
+    // Build gas coefficients per band from sensor-specific constants.
+    let gas_coeff: Vec<GasCoefficients> = sensor.gas_coefficients();
+
+    // ── Step 4: Pre-compute polynomial coefficients ──
+    let (atm_coeff, tgo_arr, normext_p0a3, btgo, broatm, bttatmg, bsatm) =
+        precompute_coefficients(
+            sensor, lut, &gas_coeff,
+            xts, xtv, xmus, xmuv, xfi, cosxfi,
+            pressure, uoz, uwv,
+        );
+
+    // Extract per-band polynomial coefficient arrays for subaeroret_new
+    let roatm_coef: Vec<[f64; NCOEF]> = atm_coeff.iter().map(|c| c.roatm_coef).collect();
+    let ttatmg_coef: Vec<[f64; NCOEF]> = atm_coeff.iter().map(|c| c.ttatmg_coef).collect();
+    let satm_coef: Vec<[f64; NCOEF]> = atm_coeff.iter().map(|c| c.satm_coef).collect();
+    let roatm_ia_max: Vec<f64> = atm_coeff.iter().map(|c| c.roatm_upper).collect();
+
+    // ── Step 5: Allocate working arrays ──
+    let mut taero = vec![DEFAULT_AERO as f32; npix];
+    let mut teps = vec![DEFAULT_EPS as f32; npix];
+    let mut ipflag = vec![0u8; npix];
+
+    let bi = sensor.band_indices();
+    let iband1 = bi.red; // reference band for aerosol retrieval (DNS_BAND4)
+
+    // Threshold values for aerosol retrieval
+    let tth = &SENTINEL_TTH[..nbands];
+
+    // ── Step 6: Climatological per-pixel atmospheric correction ──
+    // Simplified first-pass SR using scene-center atmospheric params at
+    // fixed AOT=0.05. Sentinel does NOT divide TOA by cos(SZA).
+    let mut sband: Vec<Vec<f32>> = (0..nbands)
+        .map(|_| vec![0.0f32; npix])
+        .collect();
+
+    for iband in 0..nbands {
+        // B09: atmospheric bypass (tgo=1, roatm=0, ttatmg=1, satm=0)
+        let (tgo_x_roatm, tgo_x_ttatmg, satm_val) = if iband == DNS_BAND9 {
+            (0.0f32, 1.0f32, 0.0f32)
+        } else {
+            (
+                btgo[iband] as f32 * broatm[iband] as f32,
+                btgo[iband] as f32 * bttatmg[iband] as f32,
+                bsatm[iband] as f32,
+            )
+        };
+
+        for pix in 0..npix {
+            let (i, j) = (pix / nsamps, pix % nsamps);
+            if is_fill_pixel(qaband[pix]) {
+                continue;
+            }
+
+            // Sentinel TOA is NOT divided by cos(SZA), used directly
+            let rotoa = toa_bands[iband][(i, j)];
+
+            let roslamb: f32 = {
+                let num = rotoa - tgo_x_roatm;
+                num / (tgo_x_ttatmg + satm_val * num)
+            };
+            sband[iband][pix] = roslamb;
+        }
+    }
+
+    // ── Step 7: Aerosol retrieval loop ──
+    // Precompute the quadratic fit constants for eps optimization.
+    let eps1 = LOW_EPS;
+    let eps2 = MOD_EPS;
+    let eps3 = HIGH_EPS;
+    let xa = eps1 * eps1 - eps3 * eps3;
+    let xd = ((eps2 * eps2 - eps3 * eps3) as i32) as f64; // integer truncation
+    let xb = eps1 - eps3;
+    let xe = eps2 - eps3;
+
+    // Sentinel aerosol window starts at (0,0), stepping by aero_window
+    let mut win_i = 0;
+    while win_i < nlines {
+        let mut win_j = 0;
+        while win_j < nsamps {
+            let curr_pix = win_i * nsamps + win_j;
+
+            // Skip fill pixels
+            if is_fill_pixel(qaband[curr_pix]) {
+                ipflag[curr_pix] = 1u8 << IPFLAG_FILL;
+                win_j += aero_window;
+                continue;
+            }
+
+            // Compute per-pixel lat/lon from image coordinates
+            let (pixel_lat, pixel_lon) = utm_to_deg(space_def, win_i as i32, win_j as i32);
+
+            // Look up CMG position for slope/intercept computation
+            let cmg = latlon_to_cmg(pixel_lat, pixel_lon);
+            let ratio_pix11 = cmg.idx[0];
+            let ratio_pix12 = cmg.idx[1];
+            let ratio_pix21 = cmg.idx[2];
+            let ratio_pix22 = cmg.idx[3];
+
+            let corner_indices = [ratio_pix11, ratio_pix12, ratio_pix21, ratio_pix22];
+
+            let safe_read = |arr: &[i16], idx: usize| -> i16 {
+                if idx < arr.len() { arr[idx] } else { 0 }
+            };
+
+            // Compute modified slopes and intercepts for each corner and band
+            let mut slp_b1 = [0.0f64; 4];
+            let mut int_b1 = [0.0f64; 4];
+            let mut slp_b2 = [0.0f64; 4];
+            let mut int_b2 = [0.0f64; 4];
+            let mut slp_b7 = [0.0f64; 4];
+            let mut int_b7 = [0.0f64; 4];
+
+            for (ci, &cidx) in corner_indices.iter().enumerate() {
+                let rb1_val = safe_read(&aux.ratiob1, cidx);
+                let rb2_val = safe_read(&aux.ratiob2, cidx);
+                let sndwi_val = safe_read(&aux.sndwi, cidx);
+
+                let (s, int) = modified_slope_intercept(
+                    rb1_val, rb2_val, sndwi_val,
+                    safe_read(&aux.slpratiob1, cidx),
+                    safe_read(&aux.intratiob1, cidx),
+                    rb1_val, 550,
+                );
+                slp_b1[ci] = s;
+                int_b1[ci] = int;
+
+                let (s, int) = modified_slope_intercept(
+                    rb1_val, rb2_val, sndwi_val,
+                    safe_read(&aux.slpratiob2, cidx),
+                    safe_read(&aux.intratiob2, cidx),
+                    rb2_val, 600,
+                );
+                slp_b2[ci] = s;
+                int_b2[ci] = int;
+
+                let (s, int) = modified_slope_intercept(
+                    rb1_val, rb2_val, sndwi_val,
+                    safe_read(&aux.slpratiob7, cidx),
+                    safe_read(&aux.intratiob7, cidx),
+                    safe_read(&aux.ratiob7, cidx), 2000,
+                );
+                slp_b7[ci] = s;
+                int_b7[ci] = int;
+            }
+
+            // Bilinearly interpolate slopes and intercepts
+            let slprb1 = bilerp(slp_b1, &cmg.w);
+            let intrb1 = bilerp(int_b1, &cmg.w);
+            let slprb2 = bilerp(slp_b2, &cmg.w);
+            let intrb2 = bilerp(int_b2, &cmg.w);
+            let slprb7 = bilerp(slp_b7, &cmg.w);
+            let intrb7 = bilerp(int_b7, &cmg.w);
+
+            // Compute NDWI from climatological SR: B8A and B12 at UL corner pixel
+            let sr_nir = sband[DNS_BAND8A][curr_pix] as f64;
+            let sr_swir2 = sband[DNS_BAND12][curr_pix] as f64;
+            let sr_swir2_half = sr_swir2 * 0.5;
+            let denom = sr_nir + sr_swir2_half;
+            let mut xndwi = if denom.abs() > 1.0e-10 {
+                (sr_nir - sr_swir2_half) / denom
+            } else {
+                0.0
+            };
+
+            // Clamp NDWI using andwi/sndwi thresholds from CMG
+            let andwi_val = safe_read(&aux.andwi, ratio_pix11);
+            let sndwi_val = safe_read(&aux.sndwi, ratio_pix11);
+            let ndwi_th1 = (andwi_val as f64 + 2.0 * sndwi_val as f64) * 0.001;
+            let ndwi_th2 = (andwi_val as f64 - 2.0 * sndwi_val as f64) * 0.001;
+            if xndwi > ndwi_th1 {
+                xndwi = ndwi_th1;
+            }
+            if xndwi < ndwi_th2 {
+                xndwi = ndwi_th2;
+            }
+
+            // Initialize erelc and troatm arrays
+            let mut erelc = vec![-1.0f64; nbands];
+            let mut troatm = vec![0.0f64; nbands];
+
+            // Compute band ratios from NDWI
+            erelc[DNS_BAND1] = (xndwi * slprb1 + intrb1) as f32 as f64;
+            erelc[DNS_BAND2] = (xndwi * slprb2 + intrb2) as f32 as f64;
+            erelc[DNS_BAND4] = 1.0;
+            erelc[DNS_BAND12] = (xndwi * slprb7 + intrb7) as f32 as f64;
+
+            // Average TOA in 6x6 window for aerosol retrieval bands
+            // Sentinel does NOT divide by cos(SZA)
+            let mut pix_count = 0u32;
+            let ew_line = (win_i + aero_window).min(nlines);
+            let ew_samp = (win_j + aero_window).min(nsamps);
+            for iline in win_i..ew_line {
+                for isamp in win_j..ew_samp {
+                    let win_pix = iline * nsamps + isamp;
+                    if is_fill_pixel(qaband[win_pix]) {
+                        continue;
+                    }
+                    troatm[DNS_BAND1] += toa_bands[DNS_BAND1][(iline, isamp)] as f64;
+                    troatm[DNS_BAND2] += toa_bands[DNS_BAND2][(iline, isamp)] as f64;
+                    troatm[DNS_BAND4] += toa_bands[DNS_BAND4][(iline, isamp)] as f64;
+                    troatm[DNS_BAND12] += toa_bands[DNS_BAND12][(iline, isamp)] as f64;
+                    pix_count += 1;
+                }
+            }
+
+            if pix_count > 0 {
+                troatm[DNS_BAND1] /= pix_count as f64;
+                troatm[DNS_BAND2] /= pix_count as f64;
+                troatm[DNS_BAND4] /= pix_count as f64;
+                troatm[DNS_BAND12] /= pix_count as f64;
+            }
+
+            // === Eps optimization: 3 retrievals at eps1=1.0, eps2=1.75, eps3=2.5 ===
+            let mut iaots = 0usize;
+            let result1 = subaeroret_new(
+                false, iband1, &erelc, &troatm, &tgo_arr, &roatm_ia_max,
+                &roatm_coef, &ttatmg_coef, &satm_coef, &normext_p0a3,
+                lambda, eps1, iaots, tth,
+            );
+            let residual1 = result1.residual;
+            iaots = result1.iaots;
+
+            let result2 = subaeroret_new(
+                false, iband1, &erelc, &troatm, &tgo_arr, &roatm_ia_max,
+                &roatm_coef, &ttatmg_coef, &satm_coef, &normext_p0a3,
+                lambda, eps2, iaots, tth,
+            );
+            let residual2 = result2.residual;
+            iaots = result2.iaots;
+
+            let result3 = subaeroret_new(
+                false, iband1, &erelc, &troatm, &tgo_arr, &roatm_ia_max,
+                &roatm_coef, &ttatmg_coef, &satm_coef, &normext_p0a3,
+                lambda, eps3, iaots, tth,
+            );
+            let residual3 = result3.residual;
+            iaots = result3.iaots;
+
+            // Sentinel eps quadratic optimization (C lines 1430-1454)
+            let xc = residual1 - residual3;
+            let xf_val = residual2 - residual3;
+            let denom_fit = xa * xe - xb * xd;
+            let coefa = (xc * xe - xb * xf_val) / denom_fit;
+            let coefb = (xa * xf_val - xc * xd) / denom_fit;
+            let epsmin = -coefb / (2.0 * coefa);
+            let resepsmin = xa * epsmin * epsmin + xb * epsmin + xc;
+
+            let eps = if epsmin < LOW_EPS || epsmin > HIGH_EPS {
+                if residual1 < residual3 { eps1 } else { eps3 }
+            } else if resepsmin > residual1 || resepsmin > residual3 {
+                if residual1 < residual3 { eps1 } else { eps3 }
+            } else {
+                epsmin
+            };
+
+            // Run final subaeroret_new at chosen eps
+            let result_final = subaeroret_new(
+                false, iband1, &erelc, &troatm, &tgo_arr, &roatm_ia_max,
+                &roatm_coef, &ttatmg_coef, &satm_coef, &normext_p0a3,
+                lambda, eps, iaots, tth,
+            );
+            let raot = result_final.raot;
+            let residual = result_final.residual;
+
+            teps[curr_pix] = eps as f32;
+            taero[curr_pix] = raot as f32;
+            let corf = raot / xmus;
+
+            // === Post-retrieval validation ===
+            if residual < (0.015 + 0.005 * corf + 0.10 * troatm[DNS_BAND12]) {
+                // Average TOA in NxN window for B8A
+                let mut rotoa_b8a = 0.0f64;
+                let mut pc = 0u32;
+                for iline in win_i..ew_line {
+                    for isamp in win_j..ew_samp {
+                        if isamp >= nsamps { continue; }
+                        rotoa_b8a += toa_bands[DNS_BAND8A][(iline, isamp)] as f64;
+                        pc += 1;
+                    }
+                }
+                if pc > 0 { rotoa_b8a /= pc as f64; }
+
+                let ros5 = atmcorlamb2_new(
+                    &atm_coeff[DNS_BAND8A], tgo_arr[DNS_BAND8A], DNS_BAND8A,
+                    raot, normext_p0a3[DNS_BAND8A],
+                    rotoa_b8a, lambda, eps,
+                );
+
+                // Average TOA in NxN window for B04
+                let mut rotoa_b4 = 0.0f64;
+                pc = 0;
+                for iline in win_i..ew_line {
+                    for isamp in win_j..ew_samp {
+                        if isamp >= nsamps { continue; }
+                        rotoa_b4 += toa_bands[DNS_BAND4][(iline, isamp)] as f64;
+                        pc += 1;
+                    }
+                }
+                if pc > 0 { rotoa_b4 /= pc as f64; }
+
+                let ros4 = atmcorlamb2_new(
+                    &atm_coeff[DNS_BAND4], tgo_arr[DNS_BAND4], DNS_BAND4,
+                    raot, normext_p0a3[DNS_BAND4],
+                    rotoa_b4, lambda, eps,
+                );
+
+                if ros5 > 0.1 && (ros5 - ros4) / (ros5 + ros4) > 0.0 {
+                    // Clear pixel with valid aerosol retrieval
+                    ipflag[curr_pix] |= 1u8 << IPFLAG_CLEAR;
+                } else {
+                    ipflag[curr_pix] = 1u8 << IPFLAG_WATER;
+                }
+            } else {
+                ipflag[curr_pix] = 1u8 << IPFLAG_WATER;
+            }
+
+            // === Water retest ===
+            if ipflag[curr_pix] & (1u8 << IPFLAG_WATER) != 0 {
+                // Reset erelc and troatm for water retrieval
+                let mut water_erelc = vec![-1.0f64; nbands];
+                let mut water_troatm = vec![0.0f64; nbands];
+
+                // Average TOA for water bands B01/B04/B8A/B12
+                let mut water_pc = 0u32;
+                for iline in win_i..ew_line {
+                    for isamp in win_j..ew_samp {
+                        let win_pix = iline * nsamps + isamp;
+                        if is_fill_pixel(qaband[win_pix]) { continue; }
+                        water_troatm[DNS_BAND1] += toa_bands[DNS_BAND1][(iline, isamp)] as f64;
+                        water_troatm[DNS_BAND4] += toa_bands[DNS_BAND4][(iline, isamp)] as f64;
+                        water_troatm[DNS_BAND8A] += toa_bands[DNS_BAND8A][(iline, isamp)] as f64;
+                        water_troatm[DNS_BAND12] += toa_bands[DNS_BAND12][(iline, isamp)] as f64;
+                        water_pc += 1;
+                    }
+                }
+                if water_pc > 0 {
+                    water_troatm[DNS_BAND1] /= water_pc as f64;
+                    water_troatm[DNS_BAND4] /= water_pc as f64;
+                    water_troatm[DNS_BAND8A] /= water_pc as f64;
+                    water_troatm[DNS_BAND12] /= water_pc as f64;
+                }
+
+                // Water band ratios: all 1.0
+                water_erelc[DNS_BAND1] = 1.0;
+                water_erelc[DNS_BAND4] = 1.0;
+                water_erelc[DNS_BAND8A] = 1.0;
+                water_erelc[DNS_BAND12] = 1.0;
+
+                let water_result = subaeroret_new(
+                    true, iband1, &water_erelc, &water_troatm,
+                    &tgo_arr, &roatm_ia_max, &roatm_coef, &ttatmg_coef,
+                    &satm_coef, &normext_p0a3, lambda, WATER_EPS, 0, tth,
+                );
+                teps[curr_pix] = WATER_EPS as f32;
+                taero[curr_pix] = water_result.raot as f32;
+                let water_corf = water_result.raot / xmus;
+
+                // Validate: check band 1 reflectance
+                let ros1 = atmcorlamb2_new(
+                    &atm_coeff[DNS_BAND1], tgo_arr[DNS_BAND1], DNS_BAND1,
+                    water_result.raot, normext_p0a3[DNS_BAND1],
+                    water_troatm[DNS_BAND1], lambda, WATER_EPS,
+                );
+
+                if water_result.residual > (0.010 + 0.005 * water_corf) || ros1 < 0.0 {
+                    // Not valid water — mark as failed
+                    ipflag[curr_pix] = 1u8 << IPFLAG_FAILED;
+                } else {
+                    // Valid water pixel
+                    ipflag[curr_pix] = (1u8 << IPFLAG_WATER) | (1u8 << IPFLAG_CLEAR);
+                }
+            }
+
+            // Copy taero/teps to all non-fill pixels in 6x6 window
+            for iline in win_i..ew_line {
+                for isamp in win_j..ew_samp {
+                    let win_pix = iline * nsamps + isamp;
+                    if is_fill_pixel(qaband[win_pix]) { continue; }
+                    teps[win_pix] = teps[curr_pix];
+                    taero[win_pix] = taero[curr_pix];
+                }
+            }
+
+            win_j += aero_window;
+        }
+        win_i += aero_window;
+    }
+
+    // ── Step 8: Post-processing ──
+    aerosol_interp_sentinel(aero_window, &qaband, &mut ipflag, &mut taero, nlines, nsamps);
+    ipflag_expand_failed_sentinel(&mut ipflag, nlines, nsamps);
+    aero_avg_failed_sentinel(&qaband, &mut ipflag, &mut taero, &mut teps, nlines, nsamps);
+
+    // ── Step 9: Final per-pixel atmospheric correction ──
+    let mut sr_f32: Vec<Array2<f64>> = (0..nbands)
+        .map(|_| Array2::zeros((nlines, nsamps)))
+        .collect();
+
+    for iband in 0..nbands {
+        // B10: copy TOA directly (no atmospheric correction)
+        if iband == DNS_BAND10 {
+            for iline in 0..nlines {
+                for isamp in 0..nsamps {
+                    let pix = iline * nsamps + isamp;
+                    if is_fill_pixel(qaband[pix]) { continue; }
+                    sr_f32[iband][(iline, isamp)] = toa_bands[iband][(iline, isamp)] as f64;
+                }
+            }
+            continue;
+        }
+
+        for iline in 0..nlines {
+            for isamp in 0..nsamps {
+                let pix = iline * nsamps + isamp;
+                if is_fill_pixel(qaband[pix]) { continue; }
+
+                // Use TOA directly (no cos(SZA) division for Sentinel)
+                let rotoa = toa_bands[iband][(iline, isamp)] as f64;
+                let raot = taero[pix] as f64;
+                let eps = teps[pix] as f64;
+
+                let roslamb = atmcorlamb2_new(
+                    &atm_coeff[iband],
+                    tgo_arr[iband],
+                    iband,
+                    raot,
+                    normext_p0a3[iband],
+                    rotoa,
+                    lambda,
+                    eps,
+                );
+
+                // Clamp to valid range
+                let roslamb = roslamb.clamp(MIN_VALID_REFL, MAX_VALID_REFL);
+
+                // Aerosol QA bits on B01 (not B00 like Landsat)
+                if iband == DNS_BAND1 {
+                    let rsurf = sband[iband][pix] as f64;
+                    let tmpf = (rsurf - roslamb).abs();
+                    if tmpf <= LOW_AERO_THRESH {
+                        ipflag[pix] |= 1u8 << AERO1_QA;
+                    } else if tmpf < AVG_AERO_THRESH {
+                        ipflag[pix] |= 1u8 << AERO2_QA;
+                    } else {
+                        ipflag[pix] |= (1u8 << AERO1_QA) | (1u8 << AERO2_QA);
+                    }
+                }
+
+                sr_f32[iband][(iline, isamp)] = roslamb;
+            }
+        }
+    }
+
+    // ── Step 10: Scale to output integers ──
+    let offset_f32 = BAND_OFFSET_REFL as f32;
+    let mult_f32 = MULT_FACTOR_REFL as f32;
+    let sr_bands: Vec<Array2<u16>> = sr_f32
+        .iter()
+        .map(|band| {
+            Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
+                let pix = i * nsamps + j;
+                if is_fill_pixel(qaband[pix]) {
+                    0u16
+                } else {
+                    let sband_f32 = band[(i, j)] as f32;
+                    let tmpf = (sband_f32 + offset_f32) * mult_f32;
+                    tmpf.round().clamp(0.0, u16::MAX as f32) as u16
+                }
+            })
+        })
+        .collect();
+
+    // No brightness temperature bands for Sentinel
+    let bt_out: Vec<Array2<u16>> = Vec::new();
+
+    // Scale aerosol to int16
+    let aero_mult_f32 = MULT_FACTOR_AERO as f32;
+    let aerosol = Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
+        let pix = i * nsamps + j;
+        if is_fill_pixel(qaband[pix]) {
             AERO_FILL
         } else {
             let tmpf = taero[pix] * aero_mult_f32;
