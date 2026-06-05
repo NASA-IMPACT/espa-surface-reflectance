@@ -506,6 +506,295 @@ pub fn fix_invalid_aerosols(
     fill_pass(false, 1, true, taero, teps, &mut smflag);
 }
 
+/// Bilinear interpolation of aerosol from window UL corners for Sentinel-2.
+///
+/// Ported from `aerosol_interp_sentinel()` in C `aero_interp.c:527-637`.
+pub fn aerosol_interp_sentinel(
+    aero_window: usize,
+    qaband: &[u16],
+    _ipflag: &mut [u8],
+    taero: &mut [f32],
+    nlines: usize,
+    nsamps: usize,
+) {
+    let sq_aero_win = (aero_window * aero_window) as f32;
+
+    for line in 0..nlines {
+        let awline = line + aero_window;
+
+        for samp in 0..nsamps {
+            let curr_pix = line * nsamps + samp;
+
+            // Skip fill
+            if crate::constants::is_fill_pixel(qaband[curr_pix]) {
+                continue;
+            }
+
+            let awsamp = samp + aero_window;
+
+            // Pixel indices for the 4 UL corners
+            let next_samp_pix = line * nsamps + awsamp;
+            let next_line_pix = awline * nsamps + samp;
+            let next_line_samp_pix = awline * nsamps + awsamp;
+
+            // Loop through NxN window with current pixel as UL
+            for iline in line..awline {
+                if iline >= nlines {
+                    continue;
+                }
+                let awline_iline = (awline - iline) as f32;
+                let iline_line = (iline - line) as f32;
+
+                for isamp in samp..awsamp {
+                    if isamp >= nsamps {
+                        continue;
+                    }
+
+                    let curr_win_pix = iline * nsamps + isamp;
+                    if crate::constants::is_fill_pixel(qaband[curr_win_pix]) {
+                        continue;
+                    }
+
+                    let awsamp_isamp = (awsamp - isamp) as f32;
+                    let isamp_samp = (isamp - samp) as f32;
+
+                    // Start with contribution from current UL corner
+                    let mut val = taero[curr_pix] * awline_iline * awsamp_isamp;
+
+                    // Add contributions from surrounding UL corners based on edge cases
+                    if awline < nlines && awsamp < nsamps {
+                        val += isamp_samp * awline_iline * taero[next_samp_pix]
+                            + awsamp_isamp * iline_line * taero[next_line_pix]
+                            + isamp_samp * iline_line * taero[next_line_samp_pix];
+                    } else if awline >= nlines && awsamp < nsamps {
+                        val += isamp_samp * awline_iline * taero[next_samp_pix]
+                            + awsamp_isamp * iline_line * taero[curr_pix]
+                            + isamp_samp * iline_line * taero[next_samp_pix];
+                    } else if awline < nlines && awsamp >= nsamps {
+                        val += isamp_samp * awline_iline * taero[curr_pix]
+                            + awsamp_isamp * iline_line * taero[next_line_pix]
+                            + isamp_samp * iline_line * taero[next_line_pix];
+                    } else {
+                        // Both awline >= nlines and awsamp >= nsamps
+                        val += isamp_samp * awline_iline * taero[curr_pix]
+                            + awsamp_isamp * iline_line * taero[curr_pix]
+                            + isamp_samp * iline_line * taero[curr_pix];
+                    }
+
+                    taero[curr_win_pix] = val / sq_aero_win;
+                }
+            }
+        }
+    }
+}
+
+/// Expand failed aerosol pixels to surrounding area for Sentinel-2.
+///
+/// Ported from `ipflag_expand_failed_sentinel()` in C `aero_interp.c:658-722`.
+pub fn ipflag_expand_failed_sentinel(
+    ipflag: &mut [u8],
+    nlines: usize,
+    nsamps: usize,
+) {
+    let half_win = HALF_EXPAND_WIN as isize;
+
+    // Pass 1: Mark surrounding pixels with FAILED_TMP
+    for line in 0..nlines {
+        for samp in 0..nsamps {
+            let curr_pix = line * nsamps + samp;
+
+            // Only expand from FAILED pixels
+            if ipflag[curr_pix] & (1u8 << IPFLAG_FAILED) == 0 {
+                continue;
+            }
+
+            for iline in -half_win..=half_win {
+                let win_line = line as isize + iline;
+                if win_line < 0 || win_line >= nlines as isize {
+                    continue;
+                }
+                for isamp in -half_win..=half_win {
+                    let win_samp = samp as isize + isamp;
+                    if win_samp < 0 || win_samp >= nsamps as isize {
+                        continue;
+                    }
+
+                    let curr_win_pix = win_line as usize * nsamps + win_samp as usize;
+                    // Skip fill, water, and already-temp-failed pixels
+                    if ipflag[curr_win_pix] & (1u8 << IPFLAG_FILL) != 0 {
+                        continue;
+                    }
+                    if ipflag[curr_win_pix] & (1u8 << IPFLAG_WATER) != 0 {
+                        continue;
+                    }
+                    if ipflag[curr_win_pix] & (1u8 << IPFLAG_FAILED_TMP) != 0 {
+                        continue;
+                    }
+                    ipflag[curr_win_pix] |= 1u8 << IPFLAG_FAILED_TMP;
+                }
+            }
+        }
+    }
+
+    // Pass 2: Convert FAILED_TMP to FAILED and clear TMP bit
+    let npixels = nlines * nsamps;
+    for pix in 0..npixels {
+        if ipflag[pix] & (1u8 << IPFLAG_FAILED_TMP) != 0 {
+            ipflag[pix] |= 1u8 << IPFLAG_FAILED;
+            ipflag[pix] &= !(1u8 << IPFLAG_FAILED_TMP);
+        }
+    }
+}
+
+/// Average aerosol values for failed Sentinel-2 pixels.
+///
+/// Ported from `aero_avg_failed_sentinel()` in C `aero_interp.c:741-927`.
+pub fn aero_avg_failed_sentinel(
+    qaband: &[u16],
+    ipflag: &mut [u8],
+    taero: &mut [f32],
+    teps: &mut [f32],
+    nlines: usize,
+    nsamps: usize,
+) {
+    let npixels = nlines * nsamps;
+    let half_win = HALF_FAILED_WIN as isize;
+
+    let mut taeros = vec![0.0f32; npixels];
+    let mut tepss = vec![0.0f32; npixels];
+    let mut smflag = vec![false; npixels];
+
+    // Pass 1: Average from non-fill, non-failed neighbors
+    let mut one_filled = false;
+    let mut nbpixnf = 0usize;
+
+    for line in 0..nlines {
+        for samp in 0..nsamps {
+            let curr_pix = line * nsamps + samp;
+            smflag[curr_pix] = false;
+
+            if crate::constants::is_fill_pixel(qaband[curr_pix]) {
+                continue;
+            }
+
+            let mut taerosum: f32 = 0.0;
+            let mut tepssum: f32 = 0.0;
+            let mut nbaeroavg = 0usize;
+
+            for iline in -half_win..=half_win {
+                let wl = line as isize + iline;
+                if wl < 0 || wl >= nlines as isize {
+                    continue;
+                }
+                for isamp in -half_win..=half_win {
+                    let ws = samp as isize + isamp;
+                    if ws < 0 || ws >= nsamps as isize {
+                        continue;
+                    }
+
+                    let curr_win_pix = wl as usize * nsamps + ws as usize;
+                    // Include non-fill, non-failed pixels
+                    if ipflag[curr_win_pix] & (1u8 << IPFLAG_FILL) == 0
+                        && ipflag[curr_win_pix] & (1u8 << IPFLAG_FAILED) == 0
+                    {
+                        nbaeroavg += 1;
+                        taerosum += taero[curr_win_pix];
+                        tepssum += teps[curr_win_pix];
+                    }
+                }
+            }
+
+            if nbaeroavg > MIN_VALID_WINDOW_PIX {
+                taeros[curr_pix] = taerosum / nbaeroavg as f32;
+                tepss[curr_pix] = tepssum / nbaeroavg as f32;
+                smflag[curr_pix] = true;
+                one_filled = true;
+            } else {
+                nbpixnf += 1;
+            }
+        }
+    }
+
+    // If nothing filled, use defaults for everything
+    if !one_filled {
+        for pix in 0..npixels {
+            if ipflag[pix] & (1u8 << IPFLAG_FILL) == 0 {
+                taero[pix] = DEFAULT_AERO as f32;
+                teps[pix] = DEFAULT_EPS as f32;
+            }
+        }
+        return;
+    }
+
+    // Pass 2+: Fill remaining pixels using already-filled neighbors
+    while nbpixnf > 0 {
+        let prev_nbpixnf = nbpixnf;
+        nbpixnf = 0;
+
+        for line in 0..nlines {
+            for samp in 0..nsamps {
+                let curr_pix = line * nsamps + samp;
+
+                if crate::constants::is_fill_pixel(qaband[curr_pix]) || smflag[curr_pix] {
+                    continue;
+                }
+
+                let mut taerosum: f32 = 0.0;
+                let mut tepssum: f32 = 0.0;
+                let mut nbaeroavg = 0usize;
+
+                for iline in -half_win..=half_win {
+                    let wl = line as isize + iline;
+                    if wl < 0 || wl >= nlines as isize {
+                        continue;
+                    }
+                    for isamp in -half_win..=half_win {
+                        let ws = samp as isize + isamp;
+                        if ws < 0 || ws >= nsamps as isize {
+                            continue;
+                        }
+
+                        let curr_win_pix = wl as usize * nsamps + ws as usize;
+                        if smflag[curr_win_pix] {
+                            nbaeroavg += 1;
+                            taerosum += taeros[curr_win_pix];
+                            tepssum += tepss[curr_win_pix];
+                        }
+                    }
+                }
+
+                if nbaeroavg > 0 {
+                    taeros[curr_pix] = taerosum / nbaeroavg as f32;
+                    tepss[curr_pix] = tepssum / nbaeroavg as f32;
+                    smflag[curr_pix] = true;
+                } else {
+                    nbpixnf += 1;
+                }
+            }
+        }
+
+        // If no progress, fill remaining with defaults
+        if nbpixnf >= prev_nbpixnf {
+            for pix in 0..npixels {
+                if !smflag[pix] && ipflag[pix] & (1u8 << IPFLAG_FILL) == 0 {
+                    taeros[pix] = DEFAULT_AERO as f32;
+                    tepss[pix] = DEFAULT_EPS as f32;
+                    smflag[pix] = true;
+                }
+            }
+            break;
+        }
+    }
+
+    // Copy averaged values back to taero/teps for filled pixels
+    for pix in 0..npixels {
+        if smflag[pix] {
+            taero[pix] = taeros[pix];
+            teps[pix] = tepss[pix];
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,5 +870,74 @@ mod tests {
         fix_invalid_aerosols(&mut taero, &mut teps, &ipflag, nlines, nsamps, 3, 1, 15, 7, 4);
         // Landsat never sets IPFLAG_FIXED — but taero should be filled
         assert!(taero[bad_pix] > 0.0, "Should have filled value");
+    }
+
+    #[test]
+    fn test_aerosol_interp_sentinel_basic() {
+        let nlines = 12;
+        let nsamps = 12;
+        let npix = nlines * nsamps;
+        let mut taero = vec![0.0f32; npix];
+        let mut ipflag = vec![0u8; npix];
+        let qaband = vec![0u16; npix]; // no fill (bit 0 = 0)
+
+        // Set UL corners (0,0), (0,6), (6,0), (6,6) with known values
+        taero[0] = 0.1;
+        taero[6] = 0.2;
+        taero[6 * nsamps] = 0.3;
+        taero[6 * nsamps + 6] = 0.4;
+
+        aerosol_interp_sentinel(6, &qaband, &mut ipflag, &mut taero, nlines, nsamps);
+
+        // Center of first window (3,3) should be interpolated
+        let pix33 = 3 * nsamps + 3;
+        assert!(taero[pix33] > 0.0, "Interior pixel should be interpolated");
+        // UL corner should keep its value (after self-interpolation)
+        assert!((taero[0] - 0.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_ipflag_expand_failed_sentinel() {
+        let nlines = 30;
+        let nsamps = 30;
+        let npix = nlines * nsamps;
+        let mut ipflag = vec![0u8; npix];
+
+        // Set center pixel as failed
+        let center = 15 * nsamps + 15;
+        ipflag[center] = 1u8 << IPFLAG_FAILED;
+
+        ipflag_expand_failed_sentinel(&mut ipflag, nlines, nsamps);
+
+        // Pixel 12 away should be marked as failed
+        let edge_pix = 3 * nsamps + 15; // 12 lines away
+        assert!(ipflag[edge_pix] & (1u8 << IPFLAG_FAILED) != 0);
+
+        // Pixel 13 away should NOT be marked
+        let far_pix = 2 * nsamps + 15; // 13 lines away
+        assert!(ipflag[far_pix] & (1u8 << IPFLAG_FAILED) == 0);
+    }
+
+    #[test]
+    fn test_aero_avg_failed_sentinel() {
+        let nlines = 10;
+        let nsamps = 10;
+        let npix = nlines * nsamps;
+        let qaband = vec![0u16; npix]; // no fill
+        let mut ipflag = vec![0u8; npix];
+        let mut taero = vec![0.1f32; npix];
+        let mut teps = vec![1.5f32; npix];
+
+        // Mark center pixel as failed
+        let center = 5 * nsamps + 5;
+        ipflag[center] = 1u8 << IPFLAG_FAILED;
+        taero[center] = 0.0;
+        teps[center] = 0.0;
+
+        aero_avg_failed_sentinel(&qaband, &mut ipflag, &mut taero, &mut teps, nlines, nsamps);
+
+        // Failed pixel should now have averaged values from neighbors
+        assert!(taero[center] > 0.05, "Failed pixel should be filled: {}", taero[center]);
+        assert!(teps[center] > 0.5, "Failed pixel eps should be filled: {}", teps[center]);
     }
 }
