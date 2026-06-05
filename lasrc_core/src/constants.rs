@@ -175,6 +175,75 @@ pub const MIN_VALID_WINDOW_PIX: usize = 20;
 // Fill values
 pub const ANGLE_FILL: f64 = -999.0;
 
+// Sentinel-2 Rayleigh optical depth per band (13 bands, from tauray-msi.ASC)
+// Order: B01, B02, B03, B04, B05, B06, B07, B08, B8A, B09, B10, B11, B12
+pub const TAURAY_SENTINEL: [f64; 13] = [
+    0.23432, 0.15106, 0.09102, 0.04535, 0.03584, 0.02924, 0.02338, 0.01847,
+    0.01560, 0.01092, 0.00243, 0.00128, 0.00037,
+];
+
+// Sentinel-2 band wavelengths (micrometers), all 13 bands
+pub const LAMBDA_SENTINEL_ALL: [f64; 13] = [
+    0.443, 0.490, 0.560, 0.665, 0.705, 0.740, 0.783, 0.842,
+    0.865, 0.945, 1.375, 1.610, 2.190,
+];
+
+// Sentinel-2 band count (all 13 bands including B09/B10)
+pub const NSRS_BANDS: usize = 13;
+
+// Gas transmission coefficients per Sentinel band (from gascoef-msi.ASC)
+// Order: B01, B02, B03, B04, B05, B06, B07, B08, B8A, B09, B10, B11, B12
+pub const OZTRANSA_SENTINEL: [f64; 13] = [
+    -0.00264691, -0.0272572, -0.0986512, -0.0500348, -0.0204295,
+    -0.0108641, 0.0001, 0.0001, 0.0001, 0.0001, 0.0001, 0.0001, 0.0001,
+];
+pub const WVTRANSA_SENTINEL: [f64; 13] = [
+    2.29849e-27, 2.29849e-27, 0.000777307, 0.00361051, 0.0141249,
+    0.0137067, 0.00410217, 0.0285871, 0.000390755, 0.00001, 0.01,
+    0.000640155, 0.018006,
+];
+pub const WVTRANSB_SENTINEL: [f64; 13] = [
+    0.999742, 0.999742, 0.891099, 0.754895, 0.75596, 0.763497, 0.74117,
+    0.578722, 0.900899, 0.45818, 1.0, 0.943712, 0.647517,
+];
+pub const OGTRANSA1_SENTINEL: [f64; 13] = [
+    4.91586e-20, 4.91586e-20, 4.91586e-20, 4.91586e-20, 5.3367e-06,
+    4.91586e-20, 9.03583e-05, 1.64109e-09, 1.90458e-05, 4.91586e-20,
+    7.62429e-06, 0.0212751, 0.0243065,
+];
+pub const OGTRANSB0_SENTINEL: [f64; 13] = [
+    0.000197019, 0.000197019, 0.000197019, 0.000197019, -0.980313,
+    0.000197019, 0.0265393, 1.0e-10, 0.0322844, 0.000197019, 0.000197019,
+    0.000197019, 0.000197019,
+];
+pub const OGTRANSB1_SENTINEL: [f64; 13] = [
+    9.57011e-16, 9.57011e-16, 9.57011e-16, 9.57011e-16, 1.33639,
+    9.57011e-16, 0.0532256, 1.0e-10, -0.0219907, 9.57011e-16, -0.216849,
+    0.0116062, 0.0604312,
+];
+
+// Sentinel-specific QA flag (shares bit 5 with IPFLAG_INTERP_WINDOW, different sensor)
+pub const IPFLAG_FAILED_TMP: u8 = 5;
+
+// Sentinel-2 band indices (for the 13-band array)
+pub const DNS_BAND1: usize = 0;   // B01 - Coastal aerosol
+pub const DNS_BAND2: usize = 1;   // B02 - Blue
+pub const DNS_BAND3: usize = 2;   // B03 - Green
+pub const DNS_BAND4: usize = 3;   // B04 - Red (aerosol reference)
+pub const DNS_BAND5: usize = 4;   // B05
+pub const DNS_BAND6: usize = 5;   // B06
+pub const DNS_BAND7: usize = 6;   // B07
+pub const DNS_BAND8: usize = 7;   // B08 - NIR
+pub const DNS_BAND8A: usize = 8;  // B8A - NIR narrow (NDWI/NDVI)
+pub const DNS_BAND9: usize = 9;   // B09 - Water vapor (tgo=1 bypass)
+pub const DNS_BAND10: usize = 10; // B10 - Cirrus (copy TOA)
+pub const DNS_BAND11: usize = 11; // B11 - SWIR1
+pub const DNS_BAND12: usize = 12; // B12 - SWIR2 (NDWI, aerosol)
+
+// Sentinel-2 surface reflectance threshold arrays (13 bands)
+// All zeros — Sentinel does not use the tth negative-check in subaeroret_new
+pub const SENTINEL_TTH: [f64; 13] = [0.0; 13];
+
 /// Landsat Collection 2 QA_PIXEL: bit 0 = designated fill.
 /// Matches C code's `level1_qa_is_fill()`.
 #[inline]
