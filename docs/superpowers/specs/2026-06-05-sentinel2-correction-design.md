@@ -162,9 +162,60 @@ ogtransb1: [9.57011e-16, 9.57011e-16, 9.57011e-16, 9.57011e-16, 1.33639, 9.57011
 | LUT directory | LDCMLUT/ | MSILUT/ |
 | Input format | ESPA .img from Landsat | SAFE archive (JP2) |
 
-## Testing
+## Testing and Verification
 
-- C reference output: `test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_*.img`
-- 13 SR bands + aerosol + aerosol QA, all 10980x10980
-- Extend `compare_outputs.py` for Sentinel-2 band names
-- Success: median diff 1-2 scaled units, P99 under ~30 (matching Landsat accuracy)
+### C reference output
+
+The C code has already been run on the same S2B granule. Reference output lives in:
+```
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band1.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band2.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band3.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band4.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band5.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band6.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band7.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band8.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band8a.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band9.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band10.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band11.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_band12.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_aerosol.img
+test_data/c_output/S2B_MSI_L1C_T38PNC_20260124_20260124_sr_aerosol_qa.img
+```
+
+All files are 10980x10980. SR bands are uint16, aerosol is int16 (fill=-9999), aerosol QA is uint8.
+
+### Verification process
+
+After each implementation step that produces output, run the comparison against the C reference:
+
+1. **Run the Sentinel-2 pipeline** on the test granule:
+   ```bash
+   source .venv/bin/activate
+   python lasrc_py/run_test_sentinel.py --format espa
+   ```
+
+2. **Compare Rust output against C reference** using the extended comparison script:
+   ```bash
+   python lasrc_py/compare_outputs.py --sensor sentinel \
+       --rust-dir test_data/output_espa_s2 \
+       --c-dir test_data/c_output \
+       --c-prefix S2B_MSI_L1C_T38PNC_20260124_20260124_
+   ```
+
+3. **Inspect the comparison table** for all 15 output files. The table should report per-band: % of pixels that differ, median/mean/P95/P99/max absolute difference, and center-pixel difference.
+
+4. **Iterate on discrepancies**: When a band shows unexpected diffs, investigate using the same approach as the Landsat port — check for f32/f64 precision mismatches, formula differences, band index mapping errors, and fill handling. Fix issues one at a time and re-compare after each fix.
+
+### Acceptance criteria
+
+The Rust output should match the C reference with accuracy comparable to the Landsat port:
+- **Median diff**: 1-2 scaled integer units (0.0001-0.0002 reflectance)
+- **P95 diff**: under 5 units
+- **P99 diff**: under 30 units
+- **Aerosol**: under 7% of pixels differing, median diff of 1-2
+- **Aerosol QA**: under 1% of pixels differing
+- Larger diffs in high-AOT/cloud regions are expected (same as Landsat) due to `subaeroret_new` convergence differences
+- No systematic biases (center pixel should be exact or within 1-2 units)
