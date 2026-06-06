@@ -27,6 +27,26 @@ BANDS = [
 
 NROWS, NCOLS = 7771, 7641
 
+SENTINEL_BANDS = [
+    ("sr_band1.img", np.uint16),
+    ("sr_band2.img", np.uint16),
+    ("sr_band3.img", np.uint16),
+    ("sr_band4.img", np.uint16),
+    ("sr_band5.img", np.uint16),
+    ("sr_band6.img", np.uint16),
+    ("sr_band7.img", np.uint16),
+    ("sr_band8.img", np.uint16),
+    ("sr_band8a.img", np.uint16),
+    ("sr_band9.img", np.uint16),
+    ("sr_band10.img", np.uint16),
+    ("sr_band11.img", np.uint16),
+    ("sr_band12.img", np.uint16),
+    ("sr_aerosol.img", np.int16),
+    ("sr_aerosol_qa.img", np.uint8),
+]
+
+SENTINEL_NROWS, SENTINEL_NCOLS = 10980, 10980
+
 
 def load_band(directory, fname, dtype, prefix=""):
     path = os.path.join(directory, prefix + fname)
@@ -35,7 +55,14 @@ def load_band(directory, fname, dtype, prefix=""):
     return np.fromfile(path, dtype=dtype)
 
 
-def compare(rust_dir, c_dir, c_prefix):
+def compare(rust_dir, c_dir, c_prefix, bands=None, nrows=None, ncols=None):
+    if bands is None:
+        bands = BANDS
+    if nrows is None:
+        nrows = NROWS
+    if ncols is None:
+        ncols = NCOLS
+
     # Load aerosol to build valid-pixel mask (non-fill)
     c_aero = load_band(c_dir, "sr_aerosol.img", np.int16, c_prefix)
     rust_aero = load_band(rust_dir, "sr_aerosol.img", np.int16)
@@ -46,16 +73,16 @@ def compare(rust_dir, c_dir, c_prefix):
     valid = (c_aero != -9999) & (rust_aero != -9999)
     n_valid = valid.sum()
     n_total = len(c_aero)
-    print(f"Scene: {NROWS} x {NCOLS} = {n_total} pixels, {n_valid} valid ({100*n_valid/n_total:.1f}%)")
+    print(f"Scene: {nrows} x {ncols} = {n_total} pixels, {n_valid} valid ({100*n_valid/n_total:.1f}%)")
     print()
 
     header = f"{'Band':<18} {'% differ':>8} {'Median':>7} {'Mean':>7} {'P95':>7} {'P99':>7} {'Max':>7} {'Center':>7}"
     print(header)
     print("-" * len(header))
 
-    center_idx = (NROWS // 2) * NCOLS + (NCOLS // 2)
+    center_idx = (nrows // 2) * ncols + (ncols // 2)
 
-    for fname, dtype in BANDS:
+    for fname, dtype in bands:
         rust = load_band(rust_dir, fname, dtype)
         c = load_band(c_dir, fname, dtype, c_prefix)
 
@@ -96,18 +123,42 @@ def compare(rust_dir, c_dir, c_prefix):
 
 def main():
     parser = argparse.ArgumentParser(description="Compare Rust and C ESPA outputs")
-    parser.add_argument("--rust-dir", default=DEFAULT_RUST_DIR,
+    parser.add_argument("--sensor", choices=["landsat", "sentinel"], default="landsat",
+                        help="Sensor type: landsat (default) or sentinel")
+    parser.add_argument("--rust-dir", default=None,
                         help="Directory with Rust output .img files")
-    parser.add_argument("--c-dir", default=DEFAULT_C_DIR,
+    parser.add_argument("--c-dir", default=None,
                         help="Directory with C output .img files")
-    parser.add_argument("--c-prefix", default=DEFAULT_PREFIX,
+    parser.add_argument("--c-prefix", default=None,
                         help="Filename prefix on C output files")
     args = parser.parse_args()
 
+    if args.sensor == "sentinel":
+        rust_dir = args.rust_dir or os.path.join(
+            os.path.dirname(__file__), "..", "test_data", "output_espa_s2"
+        )
+        c_dir = args.c_dir or os.path.join(
+            os.path.dirname(__file__), "..", "test_data", "c_output"
+        )
+        c_prefix = args.c_prefix or "S2B_MSI_L1C_T38PNC_20260124_20260124_"
+        bands = SENTINEL_BANDS
+        nrows = SENTINEL_NROWS
+        ncols = SENTINEL_NCOLS
+    else:
+        rust_dir = args.rust_dir or DEFAULT_RUST_DIR
+        c_dir = args.c_dir or DEFAULT_C_DIR
+        c_prefix = args.c_prefix or DEFAULT_PREFIX
+        bands = BANDS
+        nrows = NROWS
+        ncols = NCOLS
+
     compare(
-        os.path.abspath(args.rust_dir),
-        os.path.abspath(args.c_dir),
-        args.c_prefix,
+        os.path.abspath(rust_dir),
+        os.path.abspath(c_dir),
+        c_prefix,
+        bands=bands,
+        nrows=nrows,
+        ncols=ncols,
     )
 
 
