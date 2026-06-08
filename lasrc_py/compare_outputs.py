@@ -76,24 +76,29 @@ def compare(rust_dir, c_dir, c_prefix, bands=None, nrows=None, ncols=None):
     print(f"Scene: {nrows} x {ncols} = {n_total} pixels, {n_valid} valid ({100*n_valid/n_total:.1f}%)")
     print()
 
-    header = f"{'Band':<18} {'% differ':>8} {'Median':>7} {'Mean':>7} {'P95':>7} {'P99':>7} {'Max':>7} {'Center':>7}"
+    header = f"| {'Band':<18} | {'% differ':>8} | {'Median':>7} | {'Mean':>7} | {'P95':>7} | {'P99':>7} | {'Max':>7} | {'Center':>7} |"
+    sep = "|" + "-" * 20 + "|" + "-" * 10 + "|" + "-" * 9 + "|" + "-" * 9 + "|" + "-" * 9 + "|" + "-" * 9 + "|" + "-" * 9 + "|" + "-" * 9 + "|"
     print(header)
-    print("-" * len(header))
+    print(sep)
 
     center_idx = (nrows // 2) * ncols + (ncols // 2)
 
-    for fname, dtype in bands:
+    for i, (fname, dtype) in enumerate(bands):
+        # Print divider before aerosol bands
+        if fname == "sr_aerosol.img":
+            print(sep)
+
         rust = load_band(rust_dir, fname, dtype)
         c = load_band(c_dir, fname, dtype, c_prefix)
 
         if rust is None:
-            print(f"{fname:<18} SKIP (no Rust output)")
+            print(f"| {fname:<18} | SKIP (no Rust output)")
             continue
         if c is None:
-            print(f"{fname:<18} SKIP (no C output)")
+            print(f"| {fname:<18} | SKIP (no C output)")
             continue
         if rust.shape != c.shape:
-            print(f"{fname:<18} SIZE MISMATCH rust={rust.shape} c={c.shape}")
+            print(f"| {fname:<18} | SIZE MISMATCH rust={rust.shape} c={c.shape}")
             continue
 
         # All-pixel stats for % differ and center pixel
@@ -107,14 +112,14 @@ def compare(rust_dir, c_dir, c_prefix, bands=None, nrows=None, ncols=None):
         nonzero_v = vdiff[vdiff > 0]
 
         if len(nonzero_v) == 0:
-            print(f"{fname:<18} {'0.00%':>8} {'—':>7} {'—':>7} {'—':>7} {'—':>7} {'—':>7} {center_diff:>7}")
+            print(f"| {fname:<18} | {'0.00%':>8} | {'—':>7} | {'—':>7} | {'—':>7} | {'—':>7} | {'—':>7} | {center_diff:>7} |")
         else:
             median = int(np.median(nonzero_v))
             mean = nonzero_v.mean()
             p95 = int(np.percentile(nonzero_v, 95))
             p99 = int(np.percentile(nonzero_v, 99))
             mx = int(nonzero_v.max())
-            print(f"{fname:<18} {pct:>7.2f}% {median:>7} {mean:>7.1f} {p95:>7} {p99:>7} {mx:>7} {center_diff:>7}")
+            print(f"| {fname:<18} | {pct:>7.2f}% | {median:>7} | {mean:>7.1f} | {p95:>7} | {p99:>7} | {mx:>7} | {center_diff:>7} |")
 
     print()
     print("Stats are absolute differences on valid (non-fill) pixels.")
