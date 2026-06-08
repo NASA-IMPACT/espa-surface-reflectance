@@ -53,6 +53,16 @@ struct AerosolWindowResult {
     ipflag: u8,
 }
 
+struct SentinelAerosolWindowResult {
+    win_i: usize,
+    win_j: usize,
+    curr_pix: usize,
+    taero: f32,
+    teps: f32,
+    ipflag: u8,
+    is_fill: bool,
+}
+
 /// Complete surface reflectance result for a scene.
 pub struct SurfaceReflectanceResult {
     /// Surface reflectance per band, scaled uint16 (fill = 0)
@@ -1177,18 +1187,37 @@ pub fn compute_sentinel_surface_reflectance(
     let xb = eps1 - eps3;
     let xe = eps2 - eps3;
 
-    // Sentinel aerosol window starts at (0,0), stepping by aero_window
-    let mut win_i = 0;
-    while win_i < nlines {
-        let mut win_j = 0;
-        while win_j < nsamps {
+    // Pre-collect window center coordinates: Sentinel starts at (0,0), stepping by aero_window
+    let window_centers: Vec<(usize, usize)> = {
+        let mut coords = Vec::new();
+        let mut wi = 0;
+        while wi < nlines {
+            let mut wj = 0;
+            while wj < nsamps {
+                coords.push((wi, wj));
+                wj += aero_window;
+            }
+            wi += aero_window;
+        }
+        coords
+    };
+
+    // Parallel aerosol retrieval at window centers
+    let aero_results: Vec<SentinelAerosolWindowResult> = pool.install(|| {
+        window_centers.par_iter().map(|&(win_i, win_j)| {
             let curr_pix = win_i * nsamps + win_j;
 
             // Skip fill pixels
             if is_fill_pixel(qaband[curr_pix]) {
-                ipflag[curr_pix] = 1u8 << IPFLAG_FILL;
-                win_j += aero_window;
-                continue;
+                return SentinelAerosolWindowResult {
+                    win_i,
+                    win_j,
+                    curr_pix,
+                    taero: 0.0,
+                    teps: 0.0,
+                    ipflag: 1u8 << IPFLAG_FILL,
+                    is_fill: true,
+                };
             }
 
             // Compute per-pixel lat/lon from image coordinates
@@ -1381,11 +1410,12 @@ pub fn compute_sentinel_surface_reflectance(
             let raot = result_final.raot;
             let residual = result_final.residual;
 
-            teps[curr_pix] = eps as f32;
-            taero[curr_pix] = raot as f32;
+            let mut result_taero = raot as f32;
+            let mut result_teps = eps as f32;
             let corf = raot / xmus;
 
             // === Post-retrieval validation ===
+            let mut result_ipflag: u8 = 0;
             if residual < (0.015 + 0.005 * corf + 0.10 * troatm[DNS_BAND12]) {
                 // Average TOA in NxN window for B8A
                 let mut rotoa_b8a = 0.0f64;
@@ -1425,16 +1455,16 @@ pub fn compute_sentinel_surface_reflectance(
 
                 if ros5 > 0.1 && (ros5 - ros4) / (ros5 + ros4) > 0.0 {
                     // Clear pixel with valid aerosol retrieval
-                    ipflag[curr_pix] |= 1u8 << IPFLAG_CLEAR;
+                    result_ipflag |= 1u8 << IPFLAG_CLEAR;
                 } else {
-                    ipflag[curr_pix] = 1u8 << IPFLAG_WATER;
+                    result_ipflag = 1u8 << IPFLAG_WATER;
                 }
             } else {
-                ipflag[curr_pix] = 1u8 << IPFLAG_WATER;
+                result_ipflag = 1u8 << IPFLAG_WATER;
             }
 
             // === Water retest ===
-            if ipflag[curr_pix] & (1u8 << IPFLAG_WATER) != 0 {
+            if result_ipflag & (1u8 << IPFLAG_WATER) != 0 {
                 // Reset erelc and troatm for water retrieval
                 let mut water_erelc = vec![-1.0f64; nbands];
                 let mut water_troatm = vec![0.0f64; nbands];
@@ -1479,8 +1509,8 @@ pub fn compute_sentinel_surface_reflectance(
                     &tgo_arr, &roatm_ia_max, &roatm_coef, &ttatmg_coef,
                     &satm_coef, &normext_p0a3, lambda, WATER_EPS, 0, tth_water,
                 );
-                teps[curr_pix] = WATER_EPS as f32;
-                taero[curr_pix] = water_result.raot as f32;
+                result_teps = WATER_EPS as f32;
+                result_taero = water_result.raot as f32;
                 let water_corf = water_result.raot / xmus;
 
                 // Validate: check band 1 reflectance
@@ -1492,26 +1522,46 @@ pub fn compute_sentinel_surface_reflectance(
 
                 if water_result.residual > (0.010 + 0.005 * water_corf) || ros1 < 0.0 {
                     // Not valid water — mark as failed
-                    ipflag[curr_pix] = 1u8 << IPFLAG_FAILED;
+                    result_ipflag = 1u8 << IPFLAG_FAILED;
                 } else {
                     // Valid water pixel
-                    ipflag[curr_pix] = (1u8 << IPFLAG_WATER) | (1u8 << IPFLAG_CLEAR);
+                    result_ipflag = (1u8 << IPFLAG_WATER) | (1u8 << IPFLAG_CLEAR);
                 }
             }
 
-            // Copy taero/teps to all non-fill pixels in 6x6 window
-            for iline in win_i..ew_line {
-                for isamp in win_j..ew_samp {
-                    let win_pix = iline * nsamps + isamp;
-                    if is_fill_pixel(qaband[win_pix]) { continue; }
-                    teps[win_pix] = teps[curr_pix];
-                    taero[win_pix] = taero[curr_pix];
-                }
+            SentinelAerosolWindowResult {
+                win_i,
+                win_j,
+                curr_pix,
+                taero: result_taero,
+                teps: result_teps,
+                ipflag: result_ipflag,
+                is_fill: false,
             }
+        }).collect()
+    });
 
-            win_j += aero_window;
+    // Scatter results back to the output arrays, broadcasting to 6x6 windows
+    for r in &aero_results {
+        if r.is_fill {
+            ipflag[r.curr_pix] = r.ipflag;
+            continue;
         }
-        win_i += aero_window;
+        taero[r.curr_pix] = r.taero;
+        teps[r.curr_pix] = r.teps;
+        ipflag[r.curr_pix] = r.ipflag;
+
+        // Broadcast to all non-fill pixels in the window
+        let ew_line = (r.win_i + aero_window).min(nlines);
+        let ew_samp = (r.win_j + aero_window).min(nsamps);
+        for iline in r.win_i..ew_line {
+            for isamp in r.win_j..ew_samp {
+                let win_pix = iline * nsamps + isamp;
+                if is_fill_pixel(qaband[win_pix]) { continue; }
+                teps[win_pix] = r.teps;
+                taero[win_pix] = r.taero;
+            }
+        }
     }
 
     // ── Step 8: Post-processing ──
