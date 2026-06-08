@@ -45,6 +45,14 @@ pub struct AuxiliaryData {
     pub oz_default: f64,
 }
 
+/// Result from a single aerosol window-center retrieval, used for parallel collect-and-scatter.
+struct AerosolWindowResult {
+    pix: usize,
+    taero: f32,
+    teps: f32,
+    ipflag: u8,
+}
+
 /// Complete surface reflectance result for a scene.
 pub struct SurfaceReflectanceResult {
     /// Surface reflectance per band, scaled uint16 (fill = 0)
@@ -547,24 +555,38 @@ pub fn compute_surface_reflectance(
     let xb = eps1 - eps3; // -1.5
     let xe = eps2 - eps3; // -0.75
 
-    // Iterate over window centers
-    let mut iline = half_aero_window;
-    while iline < nlines {
-        let mut isamp = half_aero_window;
-        while isamp < nsamps {
+    // Pre-collect all window center coordinates
+    let window_centers: Vec<(usize, usize)> = {
+        let mut coords = Vec::new();
+        let mut iline = half_aero_window;
+        while iline < nlines {
+            let mut isamp = half_aero_window;
+            while isamp < nsamps {
+                coords.push((iline, isamp));
+                isamp += aero_window;
+            }
+            iline += aero_window;
+        }
+        coords
+    };
+
+    // Parallel aerosol retrieval at window centers
+    let aero_results: Vec<AerosolWindowResult> = pool.install(|| {
+        window_centers.par_iter().map(|&(iline, isamp)| {
             let pix = iline * nsamps + isamp;
 
-            // Skip fill pixels (keep current fill-skip behavior)
+            // Skip fill pixels
             if is_fill_pixel(qa_flat[pix]) {
-                ipflag[pix] = 1u8 << IPFLAG_FILL;
-                isamp += aero_window;
-                continue;
+                return AerosolWindowResult {
+                    pix,
+                    taero: 0.0,
+                    teps: 0.0,
+                    ipflag: 1u8 << IPFLAG_FILL,
+                };
             }
 
             // Get TOA reflectance at this pixel for the needed bands,
             // divided by cos(solar zenith) to match C code's TOA normalization.
-            // These are the original TOA values (aerob1, aerob2, aerob4, aerob5, aerob7
-            // in the C code).
             let xmus_pixel = (solar_zenith[(iline, isamp)] as f64 * DEG2RAD).cos();
             let toa_over_cos = |band_idx: usize| -> f64 {
                 let raw_toa = toa_bands[band_idx][(iline, isamp)] as f64;
@@ -582,8 +604,7 @@ pub fn compute_surface_reflectance(
             let ratio_pix22 = cmg.idx[3];
 
             // For each of the 4 CMG corners, compute modified slope/intercept
-            // for bands 1, 2, 7. The C code mutates the aux arrays, but we
-            // compute the modified values locally.
+            // for bands 1, 2, 7.
             let corner_indices = [ratio_pix11, ratio_pix12, ratio_pix21, ratio_pix22];
 
             // Helper to safely read aux array value
@@ -739,13 +760,14 @@ pub fn compute_surface_reflectance(
                 (eps3, sraot3, residual3)
             };
 
-            teps[pix] = eps as f32;
-            taero[pix] = raot as f32;
+            let mut result_taero = raot as f32;
+            let mut result_teps = eps as f32;
 
             // corf = raot / xmus_center for !use_orig_aero
             let corf = raot / xmus_center;
 
             // === Post-retrieval validation ===
+            let mut result_ipflag: u8 = 0;
             if residual < (0.015 + 0.005 * corf + 0.10 * troatm[bi.swir2]) {
                 // Check NIR (band 5) and red (band 4) to compute NDVI
                 let ros5 = atmcorlamb2_new(
@@ -760,16 +782,16 @@ pub fn compute_surface_reflectance(
                 );
 
                 if ros5 > 0.1 && (ros5 - ros4) / (ros5 + ros4) > 0.0 {
-                    ipflag[pix] |= 1u8 << IPFLAG_CLEAR;
+                    result_ipflag |= 1u8 << IPFLAG_CLEAR;
                 } else {
-                    ipflag[pix] |= 1u8 << IPFLAG_WATER;
+                    result_ipflag |= 1u8 << IPFLAG_WATER;
                 }
             } else {
-                ipflag[pix] |= 1u8 << IPFLAG_WATER;
+                result_ipflag |= 1u8 << IPFLAG_WATER;
             }
 
             // === Water retest ===
-            if ipflag[pix] & (1u8 << IPFLAG_WATER) != 0 {
+            if result_ipflag & (1u8 << IPFLAG_WATER) != 0 {
                 // Water band ratios: all active bands set to 1.0
                 let mut water_erelc = vec![-1.0f64; nbands];
                 water_erelc[bi.coastal] = 1.0;
@@ -790,8 +812,8 @@ pub fn compute_surface_reflectance(
                     &satm_coef, &normext_p0a3, lambda, WATER_EPS, 0, tth_water,
                 );
 
-                teps[pix] = WATER_EPS as f32;
-                taero[pix] = water_result.raot as f32;
+                result_teps = WATER_EPS as f32;
+                result_taero = water_result.raot as f32;
                 let water_corf = water_result.raot / xmus_center;
 
                 // Validate: check band 1 reflectance
@@ -803,16 +825,27 @@ pub fn compute_surface_reflectance(
 
                 if water_result.residual > (0.010 + 0.005 * water_corf) || ros1 < 0.0 {
                     // Not valid water, clear all QA bits
-                    ipflag[pix] = 0;
+                    result_ipflag = 0;
                 } else {
                     // Valid water pixel
-                    ipflag[pix] = (1u8 << IPFLAG_CLEAR) | (1u8 << IPFLAG_WATER);
+                    result_ipflag = (1u8 << IPFLAG_CLEAR) | (1u8 << IPFLAG_WATER);
                 }
             }
 
-            isamp += aero_window;
-        }
-        iline += aero_window;
+            AerosolWindowResult {
+                pix,
+                taero: result_taero,
+                teps: result_teps,
+                ipflag: result_ipflag,
+            }
+        }).collect()
+    });
+
+    // Scatter results back to the output arrays
+    for r in &aero_results {
+        taero[r.pix] = r.taero;
+        teps[r.pix] = r.teps;
+        ipflag[r.pix] = r.ipflag;
     }
 
     // ── Step 6: Fix invalid aerosols and interpolate ──
