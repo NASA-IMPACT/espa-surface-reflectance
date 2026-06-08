@@ -147,6 +147,7 @@ impl PyAuxiliaryData {
 ///   "aerosol"   – 1-D int16 array (flattened)
 ///   "qa"        – 1-D uint8 array (flattened)
 #[pyfunction]
+#[pyo3(signature = (sensor_name, toa_bands, bt_bands, solar_zenith, solar_azimuth, view_zenith, view_azimuth, qa_band, lut, aux, ul_corner_x, ul_corner_y, pixel_size_x, pixel_size_y, utm_zone, use_orig_aero, num_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn process_surface_reflectance<'py>(
     py: Python<'py>,
@@ -247,6 +248,7 @@ fn process_surface_reflectance<'py>(
 
 /// Compute surface reflectance for a Sentinel-2 scene.
 #[pyfunction]
+#[pyo3(signature = (sensor_name, toa_bands, solar_zenith, solar_azimuth, view_zenith, view_azimuth, qa_band, lut, aux, ul_corner_x, ul_corner_y, pixel_size_x, pixel_size_y, utm_zone, num_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn process_sentinel_surface_reflectance<'py>(
     py: Python<'py>,
