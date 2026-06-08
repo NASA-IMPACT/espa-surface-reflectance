@@ -4,6 +4,8 @@
 //! Ported from the C LaSRC main processing loop.
 
 use ndarray::{Array2, ArrayView2};
+use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
 
 use crate::aerosol::{
     aerosol_interp, fix_invalid_aerosols, subaeroret_new,
@@ -410,7 +412,12 @@ pub fn compute_surface_reflectance(
     aux: &AuxiliaryData,
     space_def: &SpaceDef,
     _use_orig_aero: bool,
+    num_threads: Option<usize>,
 ) -> SurfaceReflectanceResult {
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(num_threads.unwrap_or(0))
+        .build()
+        .expect("Failed to build Rayon thread pool");
     let (nlines, nsamps) = toa_bands[0].dim();
     let nbands = sensor.num_refl_bands();
     let lambda = sensor.lambda();
@@ -999,7 +1006,12 @@ pub fn compute_sentinel_surface_reflectance(
     lut: &LookupTables,
     aux: &AuxiliaryData,
     space_def: &SpaceDef,
+    num_threads: Option<usize>,
 ) -> SurfaceReflectanceResult {
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(num_threads.unwrap_or(0))
+        .build()
+        .expect("Failed to build Rayon thread pool");
     let (nlines, nsamps) = toa_bands[0].dim();
     let nbands = sensor.num_refl_bands(); // 13
     let lambda = sensor.lambda();

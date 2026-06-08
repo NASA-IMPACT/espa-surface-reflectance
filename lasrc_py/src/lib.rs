@@ -166,6 +166,7 @@ fn process_surface_reflectance<'py>(
     pixel_size_y: f64,
     utm_zone: i32,
     use_orig_aero: bool,
+    num_threads: Option<usize>,
 ) -> PyResult<PyObject> {
     let sensor: Box<dyn Sensor> = match sensor_name {
         "LANDSAT_8" => Box::new(Landsat8),
@@ -204,6 +205,7 @@ fn process_surface_reflectance<'py>(
         &aux.inner,
         &space_def,
         use_orig_aero,
+        num_threads,
     );
 
     // Build output dict.
@@ -262,6 +264,7 @@ fn process_sentinel_surface_reflectance<'py>(
     pixel_size_x: f64,
     pixel_size_y: f64,
     utm_zone: i32,
+    num_threads: Option<usize>,
 ) -> PyResult<PyObject> {
     let sensor: Box<dyn Sensor> = match sensor_name {
         "SENTINEL_2A" => Box::new(Sentinel2A),
@@ -292,6 +295,7 @@ fn process_sentinel_surface_reflectance<'py>(
         &lut.inner,
         &aux.inner,
         &space_def,
+        num_threads,
     );
 
     let dict = pyo3::types::PyDict::new(py);
