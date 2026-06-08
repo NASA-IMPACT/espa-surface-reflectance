@@ -173,10 +173,10 @@ pub fn subaeroret_new(
 
     if iaot <= 1 {
         // No convergence achieved — use the current AOT value
-        // C: if (iaot == 1) { *raot = raot550nm; }
+        // C: if (iaot == 1) { *raot = raot550nm; *iaots unchanged }
         final_raot = raot550nm;
         final_residual = residual as f64;
-        final_iaots = if iaots > 3 { iaots - 3 } else { 0 };
+        final_iaots = iaots; // C does NOT modify *iaots in this case
     } else {
         // C: *raot = raot550nm; raotsaved = *raot;
         final_raot = raot550nm;
@@ -786,11 +786,15 @@ pub fn aero_avg_failed_sentinel(
         }
     }
 
-    // Copy averaged values back to taero/teps for filled pixels
+    // Copy averaged values back ONLY for FAILED pixels (not fill).
+    // C: only replaces pixels with IPFLAG_FAILED set, and marks them IPFLAG_FIXED.
     for pix in 0..npixels {
-        if smflag[pix] {
+        if ipflag[pix] & (1u8 << IPFLAG_FAILED) != 0
+            && ipflag[pix] & (1u8 << IPFLAG_FILL) == 0
+        {
             taero[pix] = taeros[pix];
             teps[pix] = tepss[pix];
+            ipflag[pix] |= 1u8 << IPFLAG_FIXED;
         }
     }
 }

@@ -57,6 +57,7 @@ def process_sentinel_scene(
         solar_azimuth=angles["solar_azimuth"],
         view_zenith=angles["view_zenith"],
         view_azimuth=angles["view_azimuth"],
+        qa_band=scene["qa_band"],
         lut=lut,
         aux=aux,
         ul_corner_x=profile["ul_x"],

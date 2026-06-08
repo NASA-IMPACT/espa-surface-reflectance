@@ -52,6 +52,9 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
     nsamps_10m = None
     profile = {}
 
+    # Track fill mask: DN == 0 for any band marks fill (bit 0 of QA)
+    fill_mask = None
+
     for band_name in SENTINEL_BAND_ORDER:
         # Find JP2 file
         jp2_files = list(safe_dir.glob(f"**/*_{band_name}.jp2"))
@@ -77,19 +80,39 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
                     "nsamps": nsamps_10m,
                 }
 
+        # Detect fill at native resolution before resampling
+        dn_is_zero = dn == 0.0
+
+        # Resample fill mask to 10m if needed
+        native_res = BAND_RESOLUTION[band_name]
+        if native_res != 10:
+            dn_is_zero = _resample_to_10m(
+                dn_is_zero.astype(np.float32), native_res, nlines_10m, nsamps_10m
+            ) > 0.5
+
+        # Accumulate fill mask (any band with DN==0 → fill)
+        if fill_mask is None:
+            fill_mask = dn_is_zero
+        else:
+            fill_mask |= dn_is_zero
+
         # Unscale to TOA reflectance
         # Since Baseline 4.00: toa = (DN + offset) / quantification_value
         toa = (dn + radiometric_offset) / quantification_value
 
         # Resample to 10m if needed
-        native_res = BAND_RESOLUTION[band_name]
         if native_res != 10:
             toa = _resample_to_10m(toa, native_res, nlines_10m, nsamps_10m)
 
         toa_bands.append(toa)
 
+    # Build QA band: bit 0 = fill (matches C level1_qa_is_fill)
+    qa_band = np.zeros((nlines_10m, nsamps_10m), dtype=np.uint16)
+    qa_band[fill_mask] = 1
+
     return {
         "toa_bands": toa_bands,
+        "qa_band": qa_band,
         "angles": angles,
         "profile": profile,
     }

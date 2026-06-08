@@ -69,11 +69,13 @@ struct CmgPosition {
 /// The CMG grid covers -90..90 lat and -180..180 lon at 0.05-degree resolution.
 /// Uses cell-center coordinates (89.975, 179.975) to match the C code.
 fn latlon_to_cmg(lat: f64, lon: f64) -> CmgPosition {
-    // Fractional grid coordinates (cell-center aligned, matching C code)
-    let ycmg = (89.975 - lat) * 20.0;
-    let xcmg = (179.975 + lon) * 20.0;
+    // C declares `float xcmg, ycmg` — truncate to f32 before computing
+    // integer indices and fractional offsets so that cell selection and
+    // bilinear weights match C exactly.
+    let ycmg = ((89.975 - lat) * 20.0) as f32;
+    let xcmg = ((179.975 + lon) * 20.0) as f32;
 
-    // Integer grid indices (truncation matches C code's (int) cast)
+    // Integer grid indices (truncation matches C code's (int) cast on float)
     let row = (ycmg as isize).clamp(0, (CMG_NBLAT - 1) as isize) as usize;
     let col = (xcmg as isize).clamp(0, (CMG_NBLON - 1) as isize) as usize;
 
@@ -81,11 +83,13 @@ fn latlon_to_cmg(lat: f64, lon: f64) -> CmgPosition {
     let row1 = if row >= CMG_NBLAT - 1 { 0 } else { row + 1 };
     let col1 = if col >= CMG_NBLON - 1 { 0 } else { col + 1 };
 
-    // Fractional offsets for bilinear interpolation
-    let u = ycmg - row as f64;
-    let v = xcmg - col as f64;
-    let u = u.clamp(0.0, 1.0);
-    let v = v.clamp(0.0, 1.0);
+    // C: float u = (ycmg - lcmg), float v = (xcmg - scmg)
+    let u = (ycmg - row as f32).clamp(0.0, 1.0);
+    let v = (xcmg - col as f32).clamp(0.0, 1.0);
+
+    // C: float weights for bilinear interpolation
+    let one_minus_u = 1.0f32 - u;
+    let one_minus_v = 1.0f32 - v;
 
     CmgPosition {
         idx: [
@@ -95,10 +99,10 @@ fn latlon_to_cmg(lat: f64, lon: f64) -> CmgPosition {
             row1 * CMG_NBLON + col1,
         ],
         w: [
-            (1.0 - u) * (1.0 - v),
-            (1.0 - u) * v,
-            u * (1.0 - v),
-            u * v,
+            (one_minus_u * one_minus_v) as f64,
+            (one_minus_u * v) as f64,
+            (u * one_minus_v) as f64,
+            (u * v) as f64,
         ],
     }
 }
@@ -106,6 +110,21 @@ fn latlon_to_cmg(lat: f64, lon: f64) -> CmgPosition {
 /// Bilinear interpolation over 4 values with the given weights.
 fn bilerp(vals: [f64; 4], w: &[f64; 4]) -> f64 {
     vals[0] * w[0] + vals[1] * w[1] + vals[2] * w[2] + vals[3] * w[3]
+}
+
+/// Bilinear interpolation in f32 precision, matching C's `float` arithmetic.
+/// The CMG weights are already f32-precision (stored in f64); values are truncated
+/// to f32 before interpolation.
+fn bilerp_f32(vals: [f64; 4], w: &[f64; 4]) -> f32 {
+    let v0 = vals[0] as f32;
+    let v1 = vals[1] as f32;
+    let v2 = vals[2] as f32;
+    let v3 = vals[3] as f32;
+    let w0 = w[0] as f32;
+    let w1 = w[1] as f32;
+    let w2 = w[2] as f32;
+    let w3 = w[3] as f32;
+    v0 * w0 + v1 * w1 + v2 * w2 + v3 * w3
 }
 
 /// Compute surface pressure from DEM elevation using the barometric formula.
@@ -152,6 +171,49 @@ fn extract_atm_params(aux: &AuxiliaryData, lat: f64, lon: f64) -> (f64, f64, f64
         }
     });
     let uoz = bilerp(oz_vals, &cmg.w) / aux.oz_scale;
+
+    (pressure, uoz, uwv)
+}
+
+/// Scene-center atmospheric parameter extraction matching C's init_sr_refl.
+///
+/// Unlike `extract_atm_params` (which uses truncation + bilinear interpolation),
+/// this uses `roundf` to nearest CMG pixel and single-pixel lookup, matching the
+/// C code's behavior in init_sr_refl (lines 224-258).
+fn extract_atm_params_scene_center(aux: &AuxiliaryData, lat: f64, lon: f64) -> (f64, f64, f64) {
+    let ycmg = (89.975 - lat) * 20.0;
+    let xcmg = (179.975 + lon) * 20.0;
+
+    // C: lcmg = (int) roundf(ycmg)
+    let lcmg = (ycmg as f32).round() as isize;
+    let scmg = (xcmg as f32).round() as isize;
+
+    let lcmg = lcmg.clamp(0, CMG_NBLAT as isize) as usize;
+    let scmg = scmg.clamp(0, CMG_NBLON as isize) as usize;
+
+    let cmg_pix = lcmg * CMG_NBLON + scmg;
+
+    // Water vapor: single pixel lookup
+    let uwv = if cmg_pix < aux.wv.len() && aux.wv[cmg_pix] > 0 {
+        aux.wv[cmg_pix] as f64 / aux.wv_scale
+    } else {
+        aux.wv_default
+    };
+
+    // Ozone: single pixel lookup
+    let uoz = if cmg_pix < aux.oz.len() && aux.oz[cmg_pix] > 0 {
+        aux.oz[cmg_pix] as f64 / aux.oz_scale
+    } else {
+        aux.oz_default
+    };
+
+    // Pressure from DEM: single pixel lookup
+    // C: dem_pix = lcmg * DEM_NBLON + scmg (same grid as CMG)
+    let pressure = if cmg_pix < aux.dem.len() && aux.dem[cmg_pix] != -9999 {
+        pressure_from_elevation(aux.dem[cmg_pix] as f64)
+    } else {
+        ATMOS_PRES_0
+    };
 
     (pressure, uoz, uwv)
 }
@@ -206,6 +268,7 @@ fn precompute_coefficients(
     pressure: f64,
     uoz: f64,
     uwv: f64,
+    precomp_eps: f64,
 ) -> (Vec<AtmCorrCoefficients>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
     let nbands = sensor.num_refl_bands();
     let tauray = sensor.tauray();
@@ -252,7 +315,7 @@ fn precompute_coefficients(
                 0.0, // rotoa placeholder
                 lambda,
                 max_band_idx,
-                HIGH_EPS, // C uses eps=2.5 for precomputation
+                precomp_eps, // Landsat=2.5, Sentinel=-1.0
             );
             roatm_vals[iaot] = result.roatm;
             ttatmg_vals[iaot] = result.ttatmg;
@@ -278,7 +341,10 @@ fn precompute_coefficients(
             if ia == NAOT_VALS - 1 {
                 ia_max = NAOT_VALS - 1;
             }
-            if roatm_vals[ia] - roatm_vals[ia - 1] > 1.0e-5 {
+            // C: float subtraction compared against ESPA_EPSILON (double).
+            // roatm_arr values are float, so the subtraction is float precision.
+            let diff_f32 = roatm_vals[ia] as f32 - roatm_vals[ia - 1] as f32;
+            if (diff_f32 as f64) > 1.0e-5 {
                 continue;
             } else {
                 ia_max = ia - 1;
@@ -392,6 +458,7 @@ pub fn compute_surface_reflectance(
         pressure,
         uoz,
         uwv,
+        HIGH_EPS, // Landsat uses eps=2.5 for precomputation
     );
 
     // Extract per-band polynomial coefficient arrays for subaeroret_new
@@ -928,6 +995,7 @@ pub fn compute_sentinel_surface_reflectance(
     solar_azimuth: f64,
     view_zenith: f64,
     view_azimuth: f64,
+    qa_band: &ArrayView2<u16>,
     lut: &LookupTables,
     aux: &AuxiliaryData,
     space_def: &SpaceDef,
@@ -938,18 +1006,14 @@ pub fn compute_sentinel_surface_reflectance(
     let aero_window = sensor.aerosol_window(); // 6
     let npix = nlines * nsamps;
 
-    // ── Step 1: Fill detection ──
-    // Any band with value == 0.0 marks pixel as fill
-    let mut qaband = vec![0u16; npix];
-    for pix in 0..npix {
-        let (i, j) = (pix / nsamps, pix % nsamps);
-        for ib in 0..nbands {
-            if toa_bands[ib][(i, j)] == 0.0 {
-                qaband[pix] = 1; // bit 0 = fill
-                break;
-            }
-        }
-    }
+    // ── Step 1: Fill detection from input QA band ──
+    // Bit 0 = fill (set by reader based on DN==0 for any band)
+    let qaband: Vec<u16> = (0..npix)
+        .map(|pix| {
+            let (i, j) = (pix / nsamps, pix % nsamps);
+            qa_band[(i, j)]
+        })
+        .collect();
 
     // ── Step 2: Scene-center geometry (scalar angles) ──
     let xts = solar_zenith;
@@ -961,21 +1025,24 @@ pub fn compute_sentinel_surface_reflectance(
     let cosxfi = (xfi * DEG2RAD).cos();
 
     // ── Step 3: Scene-center atmospheric state ──
+    // Use rounded nearest-neighbor CMG lookup matching C's init_sr_refl
     let center_line_geo = (nlines / 2) as i32;
     let center_samp_geo = (nsamps / 2) as i32;
     let (scene_center_lat, scene_center_lon) =
         utm_to_deg(space_def, center_line_geo, center_samp_geo);
-    let (pressure, uoz, uwv) = extract_atm_params(aux, scene_center_lat, scene_center_lon);
+    let (pressure, uoz, uwv) = extract_atm_params_scene_center(aux, scene_center_lat, scene_center_lon);
 
     // Build gas coefficients per band from sensor-specific constants.
     let gas_coeff: Vec<GasCoefficients> = sensor.gas_coefficients();
 
     // ── Step 4: Pre-compute polynomial coefficients ──
-    let (atm_coeff, tgo_arr, normext_p0a3, btgo, broatm, bttatmg, bsatm) =
+    // C uses eps=-1.0 for Sentinel precomputation (no wavelength scaling)
+    let (atm_coeff, tgo_arr, normext_p0a3, _btgo, _broatm, _bttatmg, _bsatm) =
         precompute_coefficients(
             sensor, lut, &gas_coeff,
             xts, xtv, xmus, xmuv, xfi, cosxfi,
             pressure, uoz, uwv,
+            -1.0, // Sentinel uses eps=-1.0 for precomputation
         );
 
     // Extract per-band polynomial coefficient arrays for subaeroret_new
@@ -1002,15 +1069,39 @@ pub fn compute_sentinel_surface_reflectance(
         .map(|_| vec![0.0f32; npix])
         .collect();
 
+    let tauray = sensor.tauray();
+    let max_band_idx = lambda.len() - 1;
+
     for iband in 0..nbands {
-        // B09: atmospheric bypass (tgo=1, roatm=0, ttatmg=1, satm=0)
+        // C calls atmcorlamb2 with raot=0.05, eps=-1.0 for each band.
+        // eps=-1.0 means NO wavelength scaling (mraot550nm = raot directly).
         let (tgo_x_roatm, tgo_x_ttatmg, satm_val) = if iband == DNS_BAND9 {
             (0.0f32, 1.0f32, 0.0f32)
         } else {
+            let result = atmcorlamb2(
+                lut,
+                &gas_coeff[iband],
+                tauray[iband],
+                iband,
+                xts,
+                xtv,
+                xmus,
+                xmuv,
+                xfi,
+                cosxfi,
+                0.05,     // raot550nm
+                pressure,
+                uoz,
+                uwv,
+                0.0,      // rotoa (unused for coefficient extraction)
+                lambda,
+                max_band_idx,
+                -1.0,     // eps=-1.0: no wavelength scaling
+            );
             (
-                btgo[iband] as f32 * broatm[iband] as f32,
-                btgo[iband] as f32 * bttatmg[iband] as f32,
-                bsatm[iband] as f32,
+                result.tgo as f32 * result.roatm as f32,
+                result.tgo as f32 * result.ttatmg as f32,
+                result.satm as f32,
             )
         };
 
@@ -1113,29 +1204,34 @@ pub fn compute_sentinel_surface_reflectance(
             }
 
             // Bilinearly interpolate slopes and intercepts
-            let slprb1 = bilerp(slp_b1, &cmg.w);
-            let intrb1 = bilerp(int_b1, &cmg.w);
-            let slprb2 = bilerp(slp_b2, &cmg.w);
-            let intrb2 = bilerp(int_b2, &cmg.w);
-            let slprb7 = bilerp(slp_b7, &cmg.w);
-            let intrb7 = bilerp(int_b7, &cmg.w);
+            // C: float slprb1/intrb1 etc. — use f32 bilinear interpolation
+            let slprb1 = bilerp_f32(slp_b1, &cmg.w);
+            let intrb1 = bilerp_f32(int_b1, &cmg.w);
+            let slprb2 = bilerp_f32(slp_b2, &cmg.w);
+            let intrb2 = bilerp_f32(int_b2, &cmg.w);
+            let slprb7 = bilerp_f32(slp_b7, &cmg.w);
+            let intrb7 = bilerp_f32(int_b7, &cmg.w);
 
-            // Compute NDWI from climatological SR: B8A and B12 at UL corner pixel
+            // Compute NDWI from climatological SR: B8A and B12
+            // C: xndwi = ((double)sband[8A] - (double)(sband[12]*0.5)) /
+            //            ((double)sband[8A] + (double)(sband[12]*0.5))
+            // computed in double then stored in float
             let sr_nir = sband[DNS_BAND8A][curr_pix] as f64;
             let sr_swir2 = sband[DNS_BAND12][curr_pix] as f64;
             let sr_swir2_half = sr_swir2 * 0.5;
             let denom = sr_nir + sr_swir2_half;
-            let mut xndwi = if denom.abs() > 1.0e-10 {
-                (sr_nir - sr_swir2_half) / denom
+            let mut xndwi: f32 = if denom.abs() > 1.0e-10 {
+                ((sr_nir - sr_swir2_half) / denom) as f32
             } else {
-                0.0
+                0.0f32
             };
 
             // Clamp NDWI using andwi/sndwi thresholds from CMG
+            // C: float ndwi_th1/th2
             let andwi_val = safe_read(&aux.andwi, ratio_pix11);
             let sndwi_val = safe_read(&aux.sndwi, ratio_pix11);
-            let ndwi_th1 = (andwi_val as f64 + 2.0 * sndwi_val as f64) * 0.001;
-            let ndwi_th2 = (andwi_val as f64 - 2.0 * sndwi_val as f64) * 0.001;
+            let ndwi_th1 = ((andwi_val as f64 + 2.0 * sndwi_val as f64) * 0.001) as f32;
+            let ndwi_th2 = ((andwi_val as f64 - 2.0 * sndwi_val as f64) * 0.001) as f32;
             if xndwi > ndwi_th1 {
                 xndwi = ndwi_th1;
             }
@@ -1143,7 +1239,7 @@ pub fn compute_sentinel_surface_reflectance(
                 xndwi = ndwi_th2;
             }
 
-            // Initialize erelc and troatm arrays
+            // Initialize erelc and troatm arrays — C uses float for both
             let mut erelc = vec![-1.0f64; nbands];
             let mut troatm = vec![0.0f64; nbands];
 
@@ -1155,29 +1251,38 @@ pub fn compute_sentinel_surface_reflectance(
 
             // Average TOA in 6x6 window for aerosol retrieval bands
             // Sentinel does NOT divide by cos(SZA)
+            // C accumulates in float, so use f32 accumulators for precision match
             let mut pix_count = 0u32;
             let ew_line = (win_i + aero_window).min(nlines);
             let ew_samp = (win_j + aero_window).min(nsamps);
+            let mut troatm_b1_f32 = 0.0f32;
+            let mut troatm_b2_f32 = 0.0f32;
+            let mut troatm_b4_f32 = 0.0f32;
+            let mut troatm_b12_f32 = 0.0f32;
             for iline in win_i..ew_line {
                 for isamp in win_j..ew_samp {
                     let win_pix = iline * nsamps + isamp;
                     if is_fill_pixel(qaband[win_pix]) {
                         continue;
                     }
-                    troatm[DNS_BAND1] += toa_bands[DNS_BAND1][(iline, isamp)] as f64;
-                    troatm[DNS_BAND2] += toa_bands[DNS_BAND2][(iline, isamp)] as f64;
-                    troatm[DNS_BAND4] += toa_bands[DNS_BAND4][(iline, isamp)] as f64;
-                    troatm[DNS_BAND12] += toa_bands[DNS_BAND12][(iline, isamp)] as f64;
+                    troatm_b1_f32 += toa_bands[DNS_BAND1][(iline, isamp)];
+                    troatm_b2_f32 += toa_bands[DNS_BAND2][(iline, isamp)];
+                    troatm_b4_f32 += toa_bands[DNS_BAND4][(iline, isamp)];
+                    troatm_b12_f32 += toa_bands[DNS_BAND12][(iline, isamp)];
                     pix_count += 1;
                 }
             }
 
             if pix_count > 0 {
-                troatm[DNS_BAND1] /= pix_count as f64;
-                troatm[DNS_BAND2] /= pix_count as f64;
-                troatm[DNS_BAND4] /= pix_count as f64;
-                troatm[DNS_BAND12] /= pix_count as f64;
+                troatm_b1_f32 /= pix_count as f32;
+                troatm_b2_f32 /= pix_count as f32;
+                troatm_b4_f32 /= pix_count as f32;
+                troatm_b12_f32 /= pix_count as f32;
             }
+            troatm[DNS_BAND1] = troatm_b1_f32 as f64;
+            troatm[DNS_BAND2] = troatm_b2_f32 as f64;
+            troatm[DNS_BAND4] = troatm_b4_f32 as f64;
+            troatm[DNS_BAND12] = troatm_b12_f32 as f64;
 
             // === Eps optimization: 3 retrievals at eps1=1.0, eps2=1.75, eps3=2.5 ===
             let mut iaots = 0usize;
@@ -1289,25 +1394,33 @@ pub fn compute_sentinel_surface_reflectance(
                 let mut water_erelc = vec![-1.0f64; nbands];
                 let mut water_troatm = vec![0.0f64; nbands];
 
-                // Average TOA for water bands B01/B04/B8A/B12
+                // Average TOA for water bands B01/B04/B8A/B12 (f32 precision)
                 let mut water_pc = 0u32;
+                let mut wt_b1 = 0.0f32;
+                let mut wt_b4 = 0.0f32;
+                let mut wt_b8a = 0.0f32;
+                let mut wt_b12 = 0.0f32;
                 for iline in win_i..ew_line {
                     for isamp in win_j..ew_samp {
                         let win_pix = iline * nsamps + isamp;
                         if is_fill_pixel(qaband[win_pix]) { continue; }
-                        water_troatm[DNS_BAND1] += toa_bands[DNS_BAND1][(iline, isamp)] as f64;
-                        water_troatm[DNS_BAND4] += toa_bands[DNS_BAND4][(iline, isamp)] as f64;
-                        water_troatm[DNS_BAND8A] += toa_bands[DNS_BAND8A][(iline, isamp)] as f64;
-                        water_troatm[DNS_BAND12] += toa_bands[DNS_BAND12][(iline, isamp)] as f64;
+                        wt_b1 += toa_bands[DNS_BAND1][(iline, isamp)];
+                        wt_b4 += toa_bands[DNS_BAND4][(iline, isamp)];
+                        wt_b8a += toa_bands[DNS_BAND8A][(iline, isamp)];
+                        wt_b12 += toa_bands[DNS_BAND12][(iline, isamp)];
                         water_pc += 1;
                     }
                 }
                 if water_pc > 0 {
-                    water_troatm[DNS_BAND1] /= water_pc as f64;
-                    water_troatm[DNS_BAND4] /= water_pc as f64;
-                    water_troatm[DNS_BAND8A] /= water_pc as f64;
-                    water_troatm[DNS_BAND12] /= water_pc as f64;
+                    wt_b1 /= water_pc as f32;
+                    wt_b4 /= water_pc as f32;
+                    wt_b8a /= water_pc as f32;
+                    wt_b12 /= water_pc as f32;
                 }
+                water_troatm[DNS_BAND1] = wt_b1 as f64;
+                water_troatm[DNS_BAND4] = wt_b4 as f64;
+                water_troatm[DNS_BAND8A] = wt_b8a as f64;
+                water_troatm[DNS_BAND12] = wt_b12 as f64;
 
                 // Water band ratios: all 1.0
                 water_erelc[DNS_BAND1] = 1.0;
@@ -1315,10 +1428,11 @@ pub fn compute_sentinel_surface_reflectance(
                 water_erelc[DNS_BAND8A] = 1.0;
                 water_erelc[DNS_BAND12] = 1.0;
 
+                let tth_water = &SENTINEL_TTH_WATER[..nbands];
                 let water_result = subaeroret_new(
                     true, iband1, &water_erelc, &water_troatm,
                     &tgo_arr, &roatm_ia_max, &roatm_coef, &ttatmg_coef,
-                    &satm_coef, &normext_p0a3, lambda, WATER_EPS, 0, tth,
+                    &satm_coef, &normext_p0a3, lambda, WATER_EPS, 0, tth_water,
                 );
                 teps[curr_pix] = WATER_EPS as f32;
                 taero[curr_pix] = water_result.raot as f32;

@@ -240,9 +240,22 @@ pub const DNS_BAND10: usize = 10; // B10 - Cirrus (copy TOA)
 pub const DNS_BAND11: usize = 11; // B11 - SWIR1
 pub const DNS_BAND12: usize = 12; // B12 - SWIR2 (NDWI, aerosol)
 
-// Sentinel-2 surface reflectance threshold arrays (13 bands)
-// All zeros — Sentinel does not use the tth negative-check in subaeroret_new
-pub const SENTINEL_TTH: [f64; 13] = [0.0; 13];
+// Sentinel-2 surface reflectance threshold arrays (13 bands, PROC_ALL_BANDS)
+// Used in subaeroret_new convergence loop to stop when roslamb < tth[ib]
+// Land thresholds: B01=1e-3, B02=1e-3, B03=0, B04=1e-3, B05-B12=0 except B12=1e-4
+pub const SENTINEL_TTH: [f64; 13] = [
+    1.0e-03, 1.0e-03, 0.0, 1.0e-03,  // B01, B02, B03, B04
+    0.0, 0.0, 0.0, 0.0,              // B05, B06, B07, B08
+    0.0, 0.0, 0.0, 0.0,              // B8A, B09, B10, B11
+    1.0e-04,                          // B12
+];
+// Water thresholds: B01=1e-3, B04=1e-3, B8A=1e-3, B12=1e-4
+pub const SENTINEL_TTH_WATER: [f64; 13] = [
+    1.0e-03, 0.0, 0.0, 1.0e-03,      // B01, B02, B03, B04
+    0.0, 0.0, 0.0, 0.0,              // B05, B06, B07, B08
+    1.0e-03, 0.0, 0.0, 0.0,          // B8A, B09, B10, B11
+    1.0e-04,                          // B12
+];
 
 /// Landsat Collection 2 QA_PIXEL: bit 0 = designated fill.
 /// Matches C code's `level1_qa_is_fill()`.

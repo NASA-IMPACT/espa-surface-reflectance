@@ -84,8 +84,13 @@ pub fn atmcorlamb2_new(
     let mut mraot550nm: f32 = if eps < 0.0 || iband >= lambda.len() {
         raot550nm as f32
     } else {
-        (raot550nm as f32 / normext_ib_0_3 as f32)
-            * (lambda[iband] as f32 * lambda_sf).powf(-(eps as f32))
+        // C: pow() uses double precision even though operands start as float.
+        // The float product (lambda * lambda_sf) is promoted to double for pow(),
+        // then the result (double) is multiplied with the float quotient (promoted
+        // to double), and the final result truncated back to float.
+        let base = (lambda[iband] as f32 * lambda_sf) as f64;
+        let power = base.powf(-(eps as f64));
+        ((raot550nm as f32 / normext_ib_0_3 as f32) as f64 * power) as f32
     };
 
     if mraot550nm >= coeff.roatm_upper as f32 {
@@ -168,8 +173,10 @@ pub fn atmcorlamb2(
         } else {
             1.0f32
         };
-        (raot550nm as f32 / normext_val)
-            * (lambda[iband] as f32 * lambda_sf).powf(-(eps as f32))
+        // C: pow() uses double precision for the exponentiation
+        let base = (lambda[iband] as f32 * lambda_sf) as f64;
+        let power = base.powf(-(eps as f64));
+        ((raot550nm as f32 / normext_val) as f64 * power) as f32
     };
 
     // Normalised atmospheric pressure
