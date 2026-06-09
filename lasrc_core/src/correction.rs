@@ -896,65 +896,76 @@ pub fn compute_surface_reflectance(
     // For each pixel, reconstruct TOA from climatological SR, then apply
     // atmcorlamb2_new with per-pixel retrieved aerosol.
     // C code: rotoa = (rsurf * bttatmg[ib] / (1 - bsatm[ib] * rsurf) + broatm[ib]) * btgo[ib]
-    let mut sr_f32: Vec<Array2<f64>> = (0..nbands)
-        .map(|_| Array2::zeros((nlines, nsamps)))
+    let sr_flat: Vec<Vec<f64>> = (0..nbands)
+        .map(|_| vec![0.0f64; npix])
         .collect();
 
+    pool.install(|| {
+        (0..nlines).into_par_iter().for_each(|iline| {
+            for isamp in 0..nsamps {
+                let pix = iline * nsamps + isamp;
+
+                // Skip fill pixels
+                if is_fill_pixel(qa_flat[pix]) {
+                    continue;
+                }
+
+                let raot = taero[pix] as f64;
+                let eps = teps[pix] as f64;
+
+                for iband in 0..nbands {
+                    // Reconstruct TOA from climatological SR
+                    let rsurf = sband[iband][pix]; // f32
+                    let rotoa: f32 = ((rsurf as f64 * bttatmg[iband]
+                        / (1.0 - bsatm[iband] * rsurf as f64)
+                        + broatm[iband])
+                        * btgo[iband]) as f32;
+
+                    let roslamb = atmcorlamb2_new(
+                        &atm_coeff[iband],
+                        tgo_arr[iband],
+                        iband,
+                        raot,
+                        normext_p0a3[iband],
+                        rotoa as f64,
+                        lambda,
+                        eps,
+                    );
+
+                    let roslamb = roslamb.clamp(MIN_VALID_REFL, MAX_VALID_REFL);
+
+                    // SAFETY: Each iline is processed by exactly one thread
+                    // (Rayon's into_par_iter guarantees this). Within a thread,
+                    // pix = iline * nsamps + isamp produces unique indices for
+                    // that row, so no two threads write to the same index.
+                    unsafe {
+                        let ptr = sr_flat[iband].as_ptr() as *mut f64;
+                        *ptr.add(pix) = roslamb;
+                    }
+                }
+            }
+        });
+    });
+
+    // Serial post-pass: set aerosol QA bits on the coastal aerosol band
+    // using |rsurf - roslamb| as the aerosol level indicator.
+    // Matches C code compute_landsat_refl.c lines 1758-1780.
     for iline in 0..nlines {
         for isamp in 0..nsamps {
             let pix = iline * nsamps + isamp;
-
-            // Skip fill pixels
             if is_fill_pixel(qa_flat[pix]) {
                 continue;
             }
 
-            let raot = taero[pix] as f64;
-            let eps = teps[pix] as f64;
-
-            for iband in 0..nbands {
-                // Reconstruct TOA from climatological SR
-                // C: float rsurf, float rotoa
-                // C: rotoa = (rsurf * bttatmg[ib] / (1.0 - bsatm[ib] * rsurf) + broatm[ib]) * btgo[ib]
-                // Note: C literal 1.0 is double, so the division happens in double,
-                // but rotoa is float so the result is truncated.
-                let rsurf = sband[iband][pix]; // f32
-                let rotoa: f32 = ((rsurf as f64 * bttatmg[iband]
-                    / (1.0 - bsatm[iband] * rsurf as f64)
-                    + broatm[iband])
-                    * btgo[iband]) as f32;
-
-                let roslamb = atmcorlamb2_new(
-                    &atm_coeff[iband],
-                    tgo_arr[iband],
-                    iband,
-                    raot,
-                    normext_p0a3[iband],
-                    rotoa as f64,
-                    lambda,
-                    eps,
-                );
-
-                // Clamp to valid range
-                let roslamb = roslamb.clamp(MIN_VALID_REFL, MAX_VALID_REFL);
-                sr_f32[iband][(iline, isamp)] = roslamb;
-
-                // Set aerosol QA bits on the coastal aerosol band (band 0)
-                // using |rsurf - roslamb| as the aerosol level indicator.
-                // Matches C code compute_landsat_refl.c lines 1758-1780.
-                if iband == bi.coastal {
-                    let tmpf = (rsurf as f64 - roslamb).abs();
-                    if tmpf <= LOW_AERO_THRESH {
-                        // Low aerosol: set AERO1 only
-                        ipflag[pix] |= 1u8 << AERO1_QA;
-                    } else if tmpf < AVG_AERO_THRESH {
-                        // Average aerosol: set AERO2 only
-                        ipflag[pix] |= 1u8 << AERO2_QA;
-                    } else {
-                        // High aerosol: set both AERO1 and AERO2
-                        ipflag[pix] |= (1u8 << AERO1_QA) | (1u8 << AERO2_QA);
-                    }
-                }
+            let rsurf = sband[bi.coastal][pix] as f64;
+            let roslamb = sr_flat[bi.coastal][pix];
+            let tmpf = (rsurf - roslamb).abs();
+            if tmpf <= LOW_AERO_THRESH {
+                ipflag[pix] |= 1u8 << AERO1_QA;
+            } else if tmpf < AVG_AERO_THRESH {
+                ipflag[pix] |= 1u8 << AERO2_QA;
+            } else {
+                ipflag[pix] |= (1u8 << AERO1_QA) | (1u8 << AERO2_QA);
             }
         }
     }
@@ -965,7 +976,7 @@ pub fn compute_surface_reflectance(
     //   out_band[pix] = roundf(tmpf);
     let offset_f32 = BAND_OFFSET_REFL as f32;
     let mult_f32 = MULT_FACTOR_REFL as f32;
-    let sr_bands: Vec<Array2<u16>> = sr_f32
+    let sr_bands: Vec<Array2<u16>> = sr_flat
         .iter()
         .map(|band| {
             Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
@@ -973,7 +984,7 @@ pub fn compute_surface_reflectance(
                 if is_fill_pixel(qa_flat[pix]) {
                     0u16
                 } else {
-                    let sband_f32 = band[(i, j)] as f32;
+                    let sband_f32 = band[pix] as f32;
                     let tmpf = (sband_f32 + offset_f32) * mult_f32;
                     tmpf.round().clamp(0.0, u16::MAX as f32) as u16
                 }
@@ -1570,69 +1581,63 @@ pub fn compute_sentinel_surface_reflectance(
     aero_avg_failed_sentinel(&qaband, &mut ipflag, &mut taero, &mut teps, nlines, nsamps);
 
     // ── Step 9: Final per-pixel atmospheric correction ──
-    let mut sr_f32: Vec<Array2<f64>> = (0..nbands)
-        .map(|_| Array2::zeros((nlines, nsamps)))
+    let sr_flat: Vec<Vec<f64>> = (0..nbands)
+        .map(|_| vec![0.0f64; npix])
         .collect();
 
-    for iband in 0..nbands {
-        // B10: copy TOA directly (no atmospheric correction)
-        if iband == DNS_BAND10 {
-            for iline in 0..nlines {
-                for isamp in 0..nsamps {
-                    let pix = iline * nsamps + isamp;
-                    if is_fill_pixel(qaband[pix]) { continue; }
-                    sr_f32[iband][(iline, isamp)] = toa_bands[iband][(iline, isamp)] as f64;
-                }
-            }
-            continue;
-        }
-
-        for iline in 0..nlines {
+    pool.install(|| {
+        (0..nlines).into_par_iter().for_each(|iline| {
             for isamp in 0..nsamps {
                 let pix = iline * nsamps + isamp;
                 if is_fill_pixel(qaband[pix]) { continue; }
 
-                // Use TOA directly (no cos(SZA) division for Sentinel)
-                let rotoa = toa_bands[iband][(iline, isamp)] as f64;
                 let raot = taero[pix] as f64;
                 let eps = teps[pix] as f64;
 
-                let roslamb = atmcorlamb2_new(
-                    &atm_coeff[iband],
-                    tgo_arr[iband],
-                    iband,
-                    raot,
-                    normext_p0a3[iband],
-                    rotoa,
-                    lambda,
-                    eps,
-                );
-
-                // Clamp to valid range
-                let roslamb = roslamb.clamp(MIN_VALID_REFL, MAX_VALID_REFL);
-
-                // Aerosol QA bits on B01 (not B00 like Landsat)
-                if iband == DNS_BAND1 {
-                    let rsurf = sband[iband][pix] as f64;
-                    let tmpf = (rsurf - roslamb).abs();
-                    if tmpf <= LOW_AERO_THRESH {
-                        ipflag[pix] |= 1u8 << AERO1_QA;
-                    } else if tmpf < AVG_AERO_THRESH {
-                        ipflag[pix] |= 1u8 << AERO2_QA;
+                for iband in 0..nbands {
+                    let val = if iband == DNS_BAND10 {
+                        toa_bands[iband][(iline, isamp)] as f64
                     } else {
-                        ipflag[pix] |= (1u8 << AERO1_QA) | (1u8 << AERO2_QA);
+                        let rotoa = toa_bands[iband][(iline, isamp)] as f64;
+                        atmcorlamb2_new(
+                            &atm_coeff[iband], tgo_arr[iband], iband,
+                            raot, normext_p0a3[iband],
+                            rotoa, lambda, eps,
+                        ).clamp(MIN_VALID_REFL, MAX_VALID_REFL)
+                    };
+
+                    // SAFETY: Each iline is processed by exactly one thread
+                    // (Rayon's into_par_iter guarantees this). Within a thread,
+                    // pix = iline * nsamps + isamp produces unique indices for
+                    // that row, so no two threads write to the same index.
+                    unsafe {
+                        let ptr = sr_flat[iband].as_ptr() as *mut f64;
+                        *ptr.add(pix) = val;
                     }
                 }
-
-                sr_f32[iband][(iline, isamp)] = roslamb;
             }
+        });
+    });
+
+    // Serial post-pass: set aerosol QA bits on B01 (not B00 like Landsat)
+    for pix in 0..npix {
+        if is_fill_pixel(qaband[pix]) { continue; }
+        let rsurf = sband[DNS_BAND1][pix] as f64;
+        let roslamb = sr_flat[DNS_BAND1][pix];
+        let tmpf = (rsurf - roslamb).abs();
+        if tmpf <= LOW_AERO_THRESH {
+            ipflag[pix] |= 1u8 << AERO1_QA;
+        } else if tmpf < AVG_AERO_THRESH {
+            ipflag[pix] |= 1u8 << AERO2_QA;
+        } else {
+            ipflag[pix] |= (1u8 << AERO1_QA) | (1u8 << AERO2_QA);
         }
     }
 
     // ── Step 10: Scale to output integers ──
     let offset_f32 = BAND_OFFSET_REFL as f32;
     let mult_f32 = MULT_FACTOR_REFL as f32;
-    let sr_bands: Vec<Array2<u16>> = sr_f32
+    let sr_bands: Vec<Array2<u16>> = sr_flat
         .iter()
         .map(|band| {
             Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
@@ -1640,7 +1645,7 @@ pub fn compute_sentinel_surface_reflectance(
                 if is_fill_pixel(qaband[pix]) {
                     0u16
                 } else {
-                    let sband_f32 = band[(i, j)] as f32;
+                    let sband_f32 = band[pix] as f32;
                     let tmpf = (sband_f32 + offset_f32) * mult_f32;
                     tmpf.round().clamp(0.0, u16::MAX as f32) as u16
                 }
