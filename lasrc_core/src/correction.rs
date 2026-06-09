@@ -518,41 +518,46 @@ pub fn compute_surface_reflectance(
     // This MUST be computed before the aerosol retrieval because the
     // retrieval uses climatological SR bands 5 (NIR) and 7 (SWIR2) for NDWI.
     // C: float **sband — use f32 to match
-    let mut sband: Vec<Vec<f32>> = (0..nbands)
+    // Pre-pass: mark fill pixels in ipflag before parallel SR loop
+    for pix in 0..npix {
+        if is_fill_pixel(qa_flat[pix]) {
+            ipflag[pix] = 1u8 << IPFLAG_FILL;
+        }
+    }
+
+    let sband: Vec<Vec<f32>> = (0..nbands)
         .map(|_| vec![0.0f32; npix])
         .collect();
 
-    for iline in 0..nlines {
-        for isamp in 0..nsamps {
-            let pix = iline * nsamps + isamp;
+    pool.install(|| {
+        (0..nlines).into_par_iter().for_each(|iline| {
+            for isamp in 0..nsamps {
+                let pix = iline * nsamps + isamp;
+                if is_fill_pixel(qa_flat[pix]) { continue; }
 
-            if is_fill_pixel(qa_flat[pix]) {
-                if iline == 0 || isamp == 0 {
-                    // Initialize fill flag (C does this for band 1 only)
+                let xmus = (solar_zenith[(iline, isamp)] as f64 * DEG2RAD).cos();
+
+                for iband in 0..nbands {
+                    let raw_toa = toa_bands[iband][(iline, isamp)] as f64;
+                    let rotoa = (raw_toa / xmus).clamp(MIN_VALID_REFL, MAX_VALID_REFL) as f32;
+
+                    let tgo_x_roatm = btgo[iband] as f32 * broatm[iband] as f32;
+                    let tgo_x_ttatmg = btgo[iband] as f32 * bttatmg[iband] as f32;
+                    let roslamb: f32 = {
+                        let num = rotoa - tgo_x_roatm;
+                        num / (tgo_x_ttatmg + bsatm[iband] as f32 * num)
+                    };
+
+                    // SAFETY: Each iline is processed by exactly one thread.
+                    // pix = iline * nsamps + isamp is unique per (iline, isamp).
+                    unsafe {
+                        let ptr = sband[iband].as_ptr() as *mut f32;
+                        *ptr.add(pix) = roslamb.clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32);
+                    }
                 }
-                ipflag[pix] = 1u8 << IPFLAG_FILL;
-                continue;
             }
-
-            let xmus = (solar_zenith[(iline, isamp)] as f64 * DEG2RAD).cos();
-
-            for iband in 0..nbands {
-                // C: sband[ib][i] = toa / cos(sza) — float
-                let raw_toa = toa_bands[iband][(iline, isamp)] as f64;
-                let rotoa = (raw_toa / xmus).clamp(MIN_VALID_REFL, MAX_VALID_REFL) as f32;
-
-                // C: float arithmetic throughout climatological correction
-                // tgo_x_roatm = tgo * roatm (float * float = float)
-                let tgo_x_roatm = btgo[iband] as f32 * broatm[iband] as f32;
-                let tgo_x_ttatmg = btgo[iband] as f32 * bttatmg[iband] as f32;
-                let roslamb: f32 = {
-                    let num = rotoa - tgo_x_roatm;
-                    num / (tgo_x_ttatmg + bsatm[iband] as f32 * num)
-                };
-                sband[iband][pix] = roslamb.clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32);
-            }
-        }
-    }
+        });
+    });
 
     // ── Step 5: Aerosol retrieval at window centers ──
     // Precompute the quadratic fit constants for eps optimization.
@@ -1131,7 +1136,7 @@ pub fn compute_sentinel_surface_reflectance(
     // ── Step 6: Climatological per-pixel atmospheric correction ──
     // Simplified first-pass SR using scene-center atmospheric params at
     // fixed AOT=0.05. Sentinel does NOT divide TOA by cos(SZA).
-    let mut sband: Vec<Vec<f32>> = (0..nbands)
+    let sband: Vec<Vec<f32>> = (0..nbands)
         .map(|_| vec![0.0f32; npix])
         .collect();
 
@@ -1171,21 +1176,24 @@ pub fn compute_sentinel_surface_reflectance(
             )
         };
 
-        for pix in 0..npix {
-            let (i, j) = (pix / nsamps, pix % nsamps);
-            if is_fill_pixel(qaband[pix]) {
-                continue;
-            }
+        pool.install(|| {
+            (0..npix).into_par_iter().for_each(|pix| {
+                let (i, j) = (pix / nsamps, pix % nsamps);
+                if is_fill_pixel(qaband[pix]) { return; }
 
-            // Sentinel TOA is NOT divided by cos(SZA), used directly
-            let rotoa = toa_bands[iband][(i, j)];
+                let rotoa = toa_bands[iband][(i, j)];
+                let roslamb: f32 = {
+                    let num = rotoa - tgo_x_roatm;
+                    num / (tgo_x_ttatmg + satm_val * num)
+                };
 
-            let roslamb: f32 = {
-                let num = rotoa - tgo_x_roatm;
-                num / (tgo_x_ttatmg + satm_val * num)
-            };
-            sband[iband][pix] = roslamb;
-        }
+                // SAFETY: Each pix is unique in the par_iter range.
+                unsafe {
+                    let ptr = sband[iband].as_ptr() as *mut f32;
+                    *ptr.add(pix) = roslamb;
+                }
+            });
+        });
     }
 
     // ── Step 7: Aerosol retrieval loop ──
