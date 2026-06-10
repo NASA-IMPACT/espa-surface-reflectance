@@ -13,7 +13,10 @@ import lasrc as _lasrc
 
 def process_sentinel_scene(
     safe_dir: str | Path,
-    lut_dir: str | Path,
+    angle_hdf: str | Path,
+    intref_hdf: str | Path,
+    transm_hdf: str | Path,
+    sphera_hdf: str | Path,
     viirs_aux_path: str | Path,
     dem_path: str | Path,
     ratio_path: str | Path,
@@ -33,8 +36,9 @@ def process_sentinel_scene(
     nsamps = profile["nsamps"]
 
     # Load LUTs (HDF4)
-    lut_dir = Path(lut_dir)
-    lut_data = _load_sentinel_luts(lut_dir, nsr_bands)
+    lut_data = _load_sentinel_luts(
+        str(angle_hdf), str(intref_hdf), str(transm_hdf), str(sphera_hdf), nsr_bands
+    )
     lut = _lasrc.PyLookupTables(**lut_data)
 
     # Load auxiliary data
@@ -89,7 +93,13 @@ def _write_espa_sentinel(output_dir, result, sensor_config):
     result["qa"].astype(np.uint8).tofile(output_dir / "sr_aerosol_qa.img")
 
 
-def _load_sentinel_luts(lut_dir: Path, nsr_bands: int) -> dict:
+def _load_sentinel_luts(
+    angle_hdf_path: str,
+    intref_hdf_path: str,
+    transm_hdf_path: str,
+    sphera_hdf_path: str,
+    nsr_bands: int,
+) -> dict:
     """Load Sentinel-2 LUTs from HDF4 files.
 
     The MSI LUTs use band names (NRLUT_BAND_1, NRLUT_BAND_8a, etc.)
@@ -110,7 +120,7 @@ def _load_sentinel_luts(lut_dir: Path, nsr_bands: int) -> dict:
     ]
 
     # Angle LUT
-    hdf = SD(str(lut_dir / "ANGLE_NEW.hdf"), SDC.READ)
+    hdf = SD(angle_hdf_path, SDC.READ)
     angle_data = {}
     for name in ["TSMAX", "TSMIN", "NBFIC", "TTV", "TTS"]:
         angle_data[name.lower()] = hdf.select(name).get().astype(np.float64).ravel().tolist()
@@ -119,7 +129,7 @@ def _load_sentinel_luts(lut_dir: Path, nsr_bands: int) -> dict:
     hdf.end()
 
     # RES LUT (rolutt)
-    hdf = SD(str(lut_dir / "RES_LUT_V3.0-URBANCLEAN-V3.0.hdf"), SDC.READ)
+    hdf = SD(intref_hdf_path, SDC.READ)
     rolutt = np.zeros(nsr_bands * NPRES * NAOT * NSOLAR, dtype=np.float64)
     for ib, ds_name in enumerate(band_ds_names):
         data = hdf.select(ds_name).get().astype(np.float64)  # [NSOLAR, NAOT, NPRES]
@@ -130,14 +140,10 @@ def _load_sentinel_luts(lut_dir: Path, nsr_bands: int) -> dict:
     hdf.end()
 
     # AERO LUT (sphalbt, normext) — ASCII format
-    sphalbt, normext = _load_aero_ascii(
-        lut_dir / "AERO_LUT_V3.0-URBANCLEAN-V3.0.ASCII", nsr_bands
-    )
+    sphalbt, normext = _load_aero_ascii(sphera_hdf_path, nsr_bands)
 
     # TRANS LUT — ASCII format
-    transt = _load_trans_ascii(
-        lut_dir / "TRANS_LUT_V3.0-URBANCLEAN-V3.0.ASCII", nsr_bands
-    )
+    transt = _load_trans_ascii(transm_hdf_path, nsr_bands)
 
     return {
         "rolutt": rolutt.tolist(),

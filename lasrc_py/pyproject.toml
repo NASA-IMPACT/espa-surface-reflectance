@@ -20,4 +20,5 @@ python-source = "python"
 features = ["pyo3/extension-module"]
 
 [project.scripts]
-lasrc = "lasrc.cli:main"
+lasrc-landsat = "lasrc.cli:landsat"
+lasrc-sentinel = "lasrc.cli:sentinel"

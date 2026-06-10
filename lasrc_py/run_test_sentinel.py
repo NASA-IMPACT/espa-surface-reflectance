@@ -46,7 +46,10 @@ def main():
 
     process_sentinel_scene(
         safe_dir=SAFE_DIR,
-        lut_dir=LUT_DIR,
+        angle_hdf=LUT_DIR / "ANGLE_NEW.hdf",
+        intref_hdf=LUT_DIR / "RES_LUT_V3.0-URBANCLEAN-V3.0.hdf",
+        transm_hdf=LUT_DIR / "TRANS_LUT_V3.0-URBANCLEAN-V3.0.ASCII",
+        sphera_hdf=LUT_DIR / "AERO_LUT_V3.0-URBANCLEAN-V3.0.ASCII",
         viirs_aux_path=viirs_path,
         dem_path=AUX_DIR / "CMGDEM.hdf",
         ratio_path=AUX_DIR / "ratiomapndwiexp.hdf",
