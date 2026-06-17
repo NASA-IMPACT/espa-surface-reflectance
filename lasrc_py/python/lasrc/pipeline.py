@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from lasrc.aux import load_auxiliary_data, load_dem, load_lut_from_hdf, load_ratio_file
+from lasrc.aux import load_auxiliary_data, load_dem, load_lut, load_ratio_file
 from lasrc.io import read_landsat_scene, write_cog_output, write_espa_output
 from lasrc.sensors import SENSORS
 
@@ -16,7 +16,7 @@ import lasrc as _lasrc
 class AuxFilePaths:
     """Paths to all auxiliary input files required for surface reflectance."""
 
-    # LUT files (HDF5)
+    # LUT files: angle/intref are HDF4; transm/sphera are ASCII.
     angle_hdf: str | Path
     intref_hdf: str | Path
     transm_hdf: str | Path
@@ -38,7 +38,7 @@ def process_scene(
     sensor_name: str = "LANDSAT_8",
     output_format: str = "cog",
     use_orig_aero: bool = False,
-) -> None:
+) -> dict:
     """Process a scene from TOA to surface reflectance.
 
     Parameters
@@ -60,12 +60,12 @@ def process_scene(
 
     scene = read_landsat_scene(input_path)
 
-    lut_data = load_lut_from_hdf(
+    lut_data = load_lut(
         str(aux_files.angle_hdf),
         str(aux_files.intref_hdf),
         str(aux_files.transm_hdf),
         str(aux_files.sphera_hdf),
-        nsr_bands=sensor_config["nsr_bands"],
+        band_names=sensor_config["lut_band_names"],
     )
     lut = _lasrc.PyLookupTables(**lut_data)
 
@@ -131,3 +131,5 @@ def process_scene(
         write_espa_output(output_path, result, scene["metadata"], profile, sensor_config)
     else:
         write_cog_output(output_path, result, scene["metadata"], profile, sensor_config)
+
+    return result

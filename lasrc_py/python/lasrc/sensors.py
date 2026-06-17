@@ -17,6 +17,10 @@ SENSORS = {
         "input_thm_names": ["band10", "band11"],
         "resolution_m": 30.0,
         "nsr_bands": 8,
+        "lut_band_names": [
+            "NRLUT_BAND_1", "NRLUT_BAND_2", "NRLUT_BAND_3", "NRLUT_BAND_4",
+            "NRLUT_BAND_5", "NRLUT_BAND_6", "NRLUT_BAND_7", "NRLUT_BAND_8",
+        ],
     },
     "LANDSAT_9": {
         "name": "LANDSAT_9",
@@ -34,6 +38,10 @@ SENSORS = {
         "input_thm_names": ["band10", "band11"],
         "resolution_m": 30.0,
         "nsr_bands": 8,
+        "lut_band_names": [
+            "NRLUT_BAND_1", "NRLUT_BAND_2", "NRLUT_BAND_3", "NRLUT_BAND_4",
+            "NRLUT_BAND_5", "NRLUT_BAND_6", "NRLUT_BAND_7", "NRLUT_BAND_8",
+        ],
     },
     "SENTINEL_2A": {
         "name": "SENTINEL_2A",
@@ -51,6 +59,12 @@ SENSORS = {
         ],
         "resolution_m": 10.0,
         "nsr_bands": 13,
+        "lut_band_names": [
+            "NRLUT_BAND_1", "NRLUT_BAND_2", "NRLUT_BAND_3", "NRLUT_BAND_4",
+            "NRLUT_BAND_5", "NRLUT_BAND_6", "NRLUT_BAND_7", "NRLUT_BAND_8",
+            "NRLUT_BAND_8a", "NRLUT_BAND_9", "NRLUT_BAND_10", "NRLUT_BAND_11",
+            "NRLUT_BAND_12",
+        ],
     },
     "SENTINEL_2B": {
         "name": "SENTINEL_2B",
@@ -68,6 +82,12 @@ SENSORS = {
         ],
         "resolution_m": 10.0,
         "nsr_bands": 13,
+        "lut_band_names": [
+            "NRLUT_BAND_1", "NRLUT_BAND_2", "NRLUT_BAND_3", "NRLUT_BAND_4",
+            "NRLUT_BAND_5", "NRLUT_BAND_6", "NRLUT_BAND_7", "NRLUT_BAND_8",
+            "NRLUT_BAND_8a", "NRLUT_BAND_9", "NRLUT_BAND_10", "NRLUT_BAND_11",
+            "NRLUT_BAND_12",
+        ],
     },
     "SENTINEL_2C": {
         "name": "SENTINEL_2C",
@@ -85,5 +105,11 @@ SENSORS = {
         ],
         "resolution_m": 10.0,
         "nsr_bands": 13,
+        "lut_band_names": [
+            "NRLUT_BAND_1", "NRLUT_BAND_2", "NRLUT_BAND_3", "NRLUT_BAND_4",
+            "NRLUT_BAND_5", "NRLUT_BAND_6", "NRLUT_BAND_7", "NRLUT_BAND_8",
+            "NRLUT_BAND_8a", "NRLUT_BAND_9", "NRLUT_BAND_10", "NRLUT_BAND_11",
+            "NRLUT_BAND_12",
+        ],
     },
 }
