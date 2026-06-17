@@ -45,8 +45,10 @@ def read_landsat_scene(scene_dir: str | Path) -> dict:
                 bt = np.where(radiance > 0, k2 / np.log(k1 / radiance + 1.0), 0.0)
                 bt_bands.append(bt.astype(np.float32))
 
-    qa_file = _find_band_file(band_files, "QA_PIXEL")
-    with rasterio.open(qa_file) as src:
+    qa_files = list(scene_dir.glob("*_QA_PIXEL.TIF"))
+    if not qa_files:
+        raise FileNotFoundError(f"No *_QA_PIXEL.TIF file found in {scene_dir}")
+    with rasterio.open(qa_files[0]) as src:
         qa_band = src.read(1).astype(np.uint16)
 
     angles = _read_landsat_angles(scene_dir, metadata)
