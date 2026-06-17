@@ -1,6 +1,7 @@
 # Compiled source #
 ###################
 *.o
+*.so
  
 # Specific exes #
 #################
@@ -29,3 +30,5 @@ Cargo.lock
 # Test data (Landsat scenes, auxiliary files)
 test_data/
 
+# ----- python
+__pycache__
