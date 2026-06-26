@@ -300,6 +300,7 @@ int compute_landsat_sr_refl
     char *cmgdemnm,     /* I: climate modeling grid (CMG) DEM filename */
     char *rationm,      /* I: ratio averages filename */
     char *auxnm,        /* I: auxiliary filename for ozone and water vapor */
+    char *aux2nm,       /* I: 2nd auxiliary filename for ozone and water vapor (23-FEB-26, JPR) */
     aux_src_t aux_src   /* I: identifies the source of atmospheric aux data */
 )
 {
@@ -593,7 +594,7 @@ int compute_landsat_sr_refl
        water vapor is initialized to the value at the center of the scene (uwv)
        ozone is initialized to the value at the center of the scene (uoz) */
     retval = init_sr_refl (nlines, nsamps, input, &space_def, space, anglehdf,
-        intrefnm, transmnm, spheranm, cmgdemnm, rationm, auxnm, aux_src, &eps,
+        intrefnm, transmnm, spheranm, cmgdemnm, rationm, auxnm, aux2nm, aux_src, &eps,
         &iaots, &xtv_center, &xmuv_center, &xfi_center, &cosxfi_center,
         &raot550nm, &pres, &uoz, &uwv, &xtsstep, &xtsmin, &xtvstep, &xtvmin,
         tsmax, tsmin, tts, ttv, indts, rolutt, transt, sphalbt, normext, nbfic,

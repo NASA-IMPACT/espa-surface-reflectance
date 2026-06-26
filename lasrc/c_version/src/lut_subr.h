@@ -10,6 +10,7 @@
 #include "espa_metadata.h"
 #include "espa_geoloc.h"
 #include "error_handler.h"
+#include "date.h"
 
 /* Prototypes */
 void atmcorlamb2_new
@@ -447,6 +448,7 @@ int read_auxiliary_files
     char *cmgdemnm,     /* I: climate modeling grid DEM filename */
     char *rationm,      /* I: ratio averages filename */
     char *auxnm,        /* I: auxiliary filename for ozone and water vapor */
+    char *aux2nm,       /* I: 2nd auxiliary filename for ozone and water vapor (23-FEB-26, JPR) */
     aux_src_t aux_src,  /* I: indentifies the source of atmospheric aux data */
     int16 *dem,         /* O: CMG DEM data array [DEM_NBLAT x DEM_NBLON] */
     int16 *andwi,       /* O: avg NDWI [RATIO_NBLAT x RATIO_NBLON] */
@@ -461,7 +463,8 @@ int read_auxiliary_files
     int16 *slpratiob2,  /* O: slope band2 ratio [RATIO_NBLAT x RATIO_NBLON] */
     int16 *slpratiob7,  /* O: slope band7 ratio [RATIO_NBLAT x RATIO_NBLON] */
     uint16 *wv,         /* O: water vapor values [CMG_NBLAT x CMG_NBLON] */
-    uint8 *oz           /* O: ozone values [CMG_NBLAT x CMG_NBLON] */
+    uint8 *oz,           /* O: ozone values [CMG_NBLAT x CMG_NBLON] */
+    Date_t date
 );
 
 #endif

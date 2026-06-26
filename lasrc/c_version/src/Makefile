@@ -14,7 +14,7 @@ RM    = rm
 EXTRA = -Wall $(EXTRA_OPTIONS)
 
 # Define the include files
-INC = aero_interp.h common.h date.h input.h output.h quick_select.h poly_coeff.h lut_subr.h lasrc.h
+INC = aero_interp.h common.h date.h input.h output.h quick_select.h poly_coeff.h grib.h PGE11_grb2.h PGE11_grib2.h lut_subr.h lasrc.h
 
 # Define the source code and object files
 SRC = aero_interp.c       \
@@ -26,6 +26,9 @@ SRC = aero_interp.c       \
       input.c             \
       lut_subr.c          \
       output.c            \
+      grib.c              \
+      PGE11_grib2.c       \
+      ad_hoc_XML_reader.c       \
       poly_coeff.c        \
       quick_select.c      \
       subaeroret.c        \

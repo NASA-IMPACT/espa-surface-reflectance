@@ -60,6 +60,8 @@ int main (int argc, char *argv[])
     char *xml_infile = NULL; /* input XML filename */
     char *aux_infile = NULL; /* input auxiliary filename for water vapor
                                 and ozone*/
+    char *aux2_infile = NULL; /* second input auxiliary filename for water vapor
+                                and ozone -- 23-FEB-26, JPR */
     char *cptr = NULL;       /* pointer to the file extension */
     char aux_year[5];        /* string to contain the year of auxiliary file */
     aux_src_t aux_src;       /* identifies the source of atmospheric aux data */
@@ -120,9 +122,21 @@ int main (int argc, char *argv[])
     char rationm[STR_SIZE];   /* ratio averages filename ("ratio map" used by
                                  the aerosol retrieval algorithm) */
     char auxnm[STR_SIZE];     /* auxiliary filename for ozone and water vapor*/
+    char aux2nm[STR_SIZE];    /* second auxiliary filename for ozone and water vapor*/
+    
+    /* GRIB-handling code -- 24-FEB-26, JPR) */
+    int isGrb2, isAlsoGrb2, Grb2_file(char *filename); 
+    int read_grib_date(FILE *input, char *what, char *where, char *date, int *frcst_hrs);  
+    int read_grib2_date(char *filename, char *what, char *where, char *date, int *frcst_hrs);
+    void get_new_where(char *where);
+    FILE *fd;
+    char where[50];
+    char GRBdate[256];
+    int frcst_hrs;
 
+      
     /* Read the command-line arguments */
-    retval = get_args (argc, argv, &xml_infile, &aux_infile, &process_sr,
+    retval = get_args (argc, argv, &xml_infile, &aux_infile, &aux2_infile, &process_sr,
         &write_toa, &use_orig_aero, &verbose);
     if (retval != SUCCESS)
     {   /* get_args already printed the error message */
@@ -145,6 +159,7 @@ int main (int argc, char *argv[])
     {
         printf ("  XML input file: %s\n", xml_infile);
         printf ("  AUX input file: %s\n", aux_infile);
+        if (aux2_infile != NULL) printf ("  AUX2 input file: %s\n", aux2_infile);
         if (!process_sr)
         {
             printf ("    **Surface reflectance corrections will not be "
@@ -289,11 +304,14 @@ int main (int argc, char *argv[])
         }
     }
 
-    /* Is the atmospheric aux file VIIRS (VJ104ANC/VNP04ANC) or MODIS (L8ANC) */
-    aux_src = VIIRS;
+    /* Is the atmospheric aux file VIIRS (VJ104ANC/VNP04ANC) or MODIS (L8ANC)  */
+    
+    aux_src = AUXNULL;
+    if (strstr(aux_infile, "04ANC") != NULL)
+        aux_src = VIIRS;
     if (strstr(aux_infile, "L8ANC") != NULL)
         aux_src = MODIS;
-
+	
     /* Get the auxiliary directory and the full pathname of the auxiliary
        files to be read if processing surface reflectance */
     if (process_sr)
@@ -310,13 +328,59 @@ int main (int argc, char *argv[])
                 "available from the local directory.");
             error_handler (false, FUNC_NAME, errmsg);
         }
+	
+        /* Is the atmospheric aux file VIIRS (VJ104ANC/VNP04ANC) or MODIS (L8ANC) ... or GRIB (23-FEB-26, JPR) */
+	
+        /* Note: GRIB data has filenames with considerable variation, and you can't 
+      	 * know what you have just from the filename.  Need to run Grb2_file(char *filename) on the
+     	 * filename, and for that the files have to be at LASRC_AUX_DIR/LADS/, NOT LASRC_AUX_DIR/LADS/<year>,
+     	 * because <year> also cannot be reliably derived from the filename.
+     	 */
+	if ((aux_src != VIIRS) && (aux_src != MODIS)) {
+	 
+            sprintf (auxnm, "%s/LADS/%s", aux_path, aux_infile);
+            if ((isGrb2 = Grb2_file(auxnm)) > -1) 
+     	       aux_src = GRIB;
+             }
+	     
+        /* If we have a second file and the first was GRIB, make sure the second one is the same type of GRIB -- 23-FEB-26, JPR */
+        if ((aux2_infile != NULL) && (aux_src == GRIB)) {  /* if first isn't GRIB, ignore the second -- in other words we'll only use the second for GRIB files.  */
+	       
+              sprintf (aux2nm, "%s/LADS/%s", aux_path, aux2_infile);
+              if ((isAlsoGrb2 = Grb2_file(aux2nm)) > -1) {
+     	          if (isGrb2 != isAlsoGrb2) {
+     	            sprintf (errmsg, "both GRIB auxiliary products must match.");
+    	            error_handler (false, FUNC_NAME, errmsg);
+		     }
+                  }
+              else {
+     	         sprintf (errmsg, "both auxiliary products must match.");
+    	         error_handler (false, FUNC_NAME, errmsg);
+    	      }
+    	   }
+	   
 
         /* Grab the year of the auxiliary input file to be used for the correct
            location of the auxiliary file in the auxiliary directory */
         if (aux_src == VIIRS)
             strncpy (aux_year, &aux_infile[10], 4);
-        else
+        else if (aux_src == MODIS)
             strncpy (aux_year, &aux_infile[5], 4);
+        else {  /* perhaps not necessary for GRIB files, but just in case... */
+	    strcpy(where, "atmos col");
+	    if (isGrb2 == 1) {
+	       fd = fopen(auxnm, "rb");
+	       read_grib_date(fd, "PWAT", where, GRBdate, &frcst_hrs);  
+	       //printf("  xxxxxxxx GRBdate is %s\n", GRBdate);	       
+	       fclose(fd);
+	       }
+	    else if (isGrb2 == 2) {
+	       get_new_where(where);
+	       read_grib2_date(auxnm, "PWAT", where, GRBdate, &frcst_hrs);  
+	       //printf("  rrxxxxxxxx GRBdate is %s\n", GRBdate);	       
+	       }	       
+	    strncpy (aux_year, &GRBdate[0], 4);
+	    }
         aux_year[4] = '\0';
 
         /* Set up the look-up table files and make sure they exist */
@@ -343,7 +407,10 @@ int main (int argc, char *argv[])
 
         sprintf (cmgdemnm, "%s/CMGDEM.hdf", aux_path);
         sprintf (rationm, "%s/ratiomapndwiexp.hdf", aux_path);
-        sprintf (auxnm, "%s/LADS/%s/%s", aux_path, aux_year, aux_infile);
+        if (aux_src != GRIB ) {  /* if it's GRIB, they've already been set */
+	    sprintf (auxnm, "%s/LADS/%s/%s", aux_path, aux_year, aux_infile);   
+            sprintf (aux2nm, "%s/LADS/%s/%s", aux_path, aux_year, aux2_infile);
+	   }
 
         if (stat (anglehdf, &statbuf) == -1)
         {
@@ -397,6 +464,13 @@ int main (int argc, char *argv[])
         {
             sprintf (errmsg, "Could not find auxnm data file: %s\n  Check "
                 "LASRC_AUX_DIR environment variable.", auxnm);
+            error_handler (false, FUNC_NAME, errmsg);
+            exit (ERROR);
+        }
+        if ((aux2_infile != NULL) && (stat (aux2nm, &statbuf) == -1) && (aux_src == GRIB))
+        {
+            sprintf (errmsg, "Could not find aux2nm data file: %s\n  Check "
+                "LASRC_AUX_DIR environment variable.", aux2nm);
             error_handler (false, FUNC_NAME, errmsg);
             exit (ERROR);
         }
@@ -585,7 +659,7 @@ int main (int argc, char *argv[])
             retval = compute_landsat_sr_refl (input, &xml_metadata, xml_infile,
                 qaband, out_band, nlines, nsamps, pixsize, sband, sza, saa,
                 vza, vaa, xts, xmus, use_orig_aero, anglehdf, intrefnm,
-                transmnm, spheranm, cmgdemnm, rationm, auxnm, aux_src);
+                transmnm, spheranm, cmgdemnm, rationm, auxnm, aux2nm, aux_src);
             if (retval != SUCCESS)
             {
                 sprintf (errmsg, "Error computing Landsat surface reflectance");
@@ -598,7 +672,7 @@ int main (int argc, char *argv[])
             retval = compute_sentinel_sr_refl (input, &xml_metadata, xml_infile,
                 qaband, nlines, nsamps, pixsize, toaband, sband, out_band, xts,
                 xmus, use_orig_aero, anglehdf, intrefnm, transmnm, spheranm,
-                cmgdemnm, rationm, auxnm, aux_src);
+                cmgdemnm, rationm, auxnm, aux2nm, aux_src);
             if (retval != SUCCESS)
             {
                 sprintf (errmsg, "Error computing Sentinel-2 surface "
@@ -620,6 +694,7 @@ int main (int argc, char *argv[])
     /* Free the filename pointers */
     free (xml_infile);
     free (aux_infile);
+    if (aux2_infile != NULL) free (aux2_infile);
 
     /* Free memory for band data */
     free (qaband);
@@ -682,6 +757,7 @@ void usage ()
     printf ("usage: lasrc "
             "--xml=input_xml_filename "
             "--aux=input_auxiliary_filename "
+            "[--aux2=input_auxiliary_filename] "
             "--process_sr=true:false --write_toa [--use_orig_aero_alg] "
             "[--verbose] [--version]\n");
 
@@ -698,6 +774,12 @@ void usage ()
             "reflectance processing (Landsat) and brightness temperature will "
             "be done. If set to false for Sentinel products, then nothing is "
             "done.\n");
+    printf ("    -aux2: name of a second input auxiliary file containing ozone "
+            "and water vapor for the scene date.  The file is expected to "
+            "live in the $LASRC_AUX_DIR/LADS directory or in the local "
+            "directory.  If both aux files are given, data is temporally interpolated "
+	    "between them.  When two aux files are to be processed, both must be "
+	    "in the GRIB or GRIB2 format\n");
     printf ("    -write_toa: the intermediate Landsat TOA reflectance products "
             "for bands 1-7 as well as the brightness temperature, are written "
             "to the output file. This argument has no relevance for Sentinel-2 "
@@ -718,6 +800,15 @@ void usage ()
             "--aux=VJ104ANC.A2013181.002.2022179071944.h5 --verbose\n");
     printf ("   ==> Writes bands 9-11 as TOA reflectance and brightness "
             "temperature.  Writes bands 1-7 as surface reflectance.\n\n");
+
+
+    printf ("\nExample: lasrc "
+            "--xml=LC08_L1TP_078014_20220306_20220314_02_T1.xml "
+            "--aux=gdas1.PGrbF00.220306.18z --aux2=gdas1.PGrbF00.220307.00z --verbose\n");
+    printf ("   ==> Writes bands 9-11 as TOA reflectance and brightness "
+            "temperature.  Writes bands 1-7 as surface reflectance.  Temporally "
+	    "interpolates water vapor and ozone data from two GRIB format files "
+	    "bracketting the scene acquisition time.\n\n");
 
     printf ("\nExample: lasrc "
             "--xml=LC08_L1TP_041027_20130630_20140312_02_T1.xml "
