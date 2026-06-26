@@ -2907,6 +2907,12 @@ static int open_gb_oz_wv_datasets
     Date_t firstdate, seconddate;
     int32 NearlyZero(double x);  /* below */
     long k, l;
+    float CMGgeoincr, GRIBlatincr, GRIBlonincr, rowfactor, colfactor, CMGlat, CMGlon, value;
+    int iline, isamp, whichone;
+    int get_cart_linesamp(float lat, float lon, float latres, int samps, float lonres, int *iline,
+                          int *isamp, float *rowfactor, float *colfactor);
+    float get_cart_interp(int iline, int isamp, int samps, float rowfactor, float colfactor, int totalpix, float *anc);
+   
         
 	
     /*printf("file1 %s, file2 %s\n", filename, file2name);*/
@@ -3074,6 +3080,9 @@ TOZNE time two is 2018-08-04T18:00:00.000000Z*/
       }
       }
 
+whichone = 0;
+
+if (whichone == 1) {
 /* Now, extrapolate the 1 pixel-per-degree data in tmpfltarray (GDAS) into 20-pixels-per-degree data, to match 
  * CMG-format data */ 
 
@@ -3092,7 +3101,37 @@ TOZNE time two is 2018-08-04T18:00:00.000000Z*/
              l++;
 	 }
      }
+}
+else {
+/* Now, interpolate the 1 pixel-per-degree data in tmpfltarray (GDAS) into 20-pixels-per-degree data, to match 
+ * CMG-format data */ 
+    
+   CMGgeoincr = 180.0/(float)CMG_NBLAT;
+   GRIBlatincr = 180.0/(float)(ny-1);  /* ny is 181 for GDAS, 361 for others...  */
+   GRIBlonincr = 360.0/(float)(nx);
+   CMGlat = 90.0 + CMGgeoincr;
+   
 
+   l = 0L;
+   for (i = 0; i < CMG_NBLAT; i++) {
+         CMGlat -= CMGgeoincr;
+         CMGlon = -180.0 - CMGgeoincr;
+	 for (j = 0; j < CMG_NBLON; j++) {
+             CMGlon += CMGgeoincr;
+             get_cart_linesamp(CMGlat, CMGlon, GRIBlatincr, nx, GRIBlonincr,
+                                    &(iline), &(isamp), &(rowfactor), &(colfactor));
+				    
+             value = get_cart_interp(iline, isamp, nx, rowfactor, colfactor, ny*nx, tmpfltarray[1][0]);
+             oz[l] = (uint8)(value*0.40);  /* divide by 1000 to convert from Dobsons to cm-atm, then multiply by 400 to scale */
+
+             value = get_cart_interp(iline, isamp, nx, rowfactor, colfactor, ny*nx, tmpfltarray[0][0]);
+             wv[l] = (uint16)(value*10.0);
+
+
+             l++;
+	 }
+     }
+}
 
 /*int32 sd,sds,dims[2],start[2];
 sd = SDstart("whatever.hdf", DFACC_CREATE);
@@ -3113,6 +3152,69 @@ SDend(sd);*/
 return (0);
 
 }
+
+int get_cart_linesamp(float lat, float lon, float latres, int samps, float lonres, int *iline,
+                        int *isamp, float *rowfactor, float *colfactor)
+{
+    /*float rowsub, colsub;*/
+    double tmp;
+
+    *iline = *isamp = (int)0;
+    *colfactor = *rowfactor = (float)0.0; /* just in case */
+
+    /* check inputs */
+    if (lat > 90.0F || lat < -90.0F || lon > 180.0F || lon < -180.0F) return (0);
+
+    *iline = (int)(((90.0F - lat) / latres) + 0.5F);
+    *rowfactor = (float)((90.0F - ((float)(*iline) * latres)) - lat) / latres;
+    if ((*rowfactor) < 0.0F) {
+        (*iline)--;
+        *rowfactor = 1.0F - fabsf((float)(*rowfactor));
+    }
+
+    /* special wrap around case */
+    if (lon > (180.0F - (lonres * 0.5F))) lon = -180.0F - (180.0F - lon);
+
+    *isamp = (int)(((lon + 180.0F) / lonres) + 0.5F);
+    tmp = (double)(lon + (180.0F - ((*isamp) * lonres))) / lonres; /*29-OCT-01*/
+    *colfactor = (float)tmp;
+    if ((*colfactor) < 0.0F) {
+        (*isamp)--;
+        /* special wrap around case */
+        if ((*isamp) < 0) *isamp = (samps - 1);
+
+        *colfactor = 1.0F - fabsf((float)(*colfactor));
+    }
+
+    return (1);
+}
+
+float get_cart_interp(int iline, int isamp, int samps, float rowfactor, float colfactor, int totalpix, float *anc)
+{
+    float v1, v2, v3, v4;
+    int i1, i2, i3, i4;
+    float interp;
+
+    /* obtain four corners */
+    v1 = 0.0;
+    v2 = 0.0;
+    v3 = 0.0;
+    v4 = 0.0;
+    i1 = iline * samps + isamp;
+    i2 = (iline + 1) * samps + isamp;
+    i3 = (iline + 1) * samps + isamp + 1;
+    i4 = iline * samps + isamp + 1;
+    if (i1 >= 0 && i1 < totalpix) v1 = anc[i1];
+    if (i2 >= 0 && i2 < totalpix) v2 = anc[i2];
+    if (i3 >= 0 && i3 < totalpix) v3 = anc[i3];
+    if (i4 >= 0 && i4 < totalpix) v4 = anc[i4];
+
+    interp = (1.0F - rowfactor) * (1.0F - colfactor) * v1 + rowfactor * (1.0F - colfactor) * v2 +
+             rowfactor * colfactor * v3 + colfactor * (1.0F - rowfactor) * v4;
+
+    return (interp);
+}
+
 
 int32 NearlyZero(double x)
 {

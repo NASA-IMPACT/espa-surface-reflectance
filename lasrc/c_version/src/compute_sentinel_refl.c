@@ -859,7 +859,8 @@ int compute_sentinel_sr_refl
             for (j = 0; j < nsamps; j++, curr_pix++)
             {
                 /* If this pixel is fill, do not process */
-                if (level1_qa_is_fill (qaband[i]))
+                /*if (level1_qa_is_fill (qaband[i]))*/
+                if (level1_qa_is_fill (qaband[curr_pix]))  /* bugfix 30-APR-26 JPR */
                     continue;
 
                 /* Get the lat/long for the current pixel */

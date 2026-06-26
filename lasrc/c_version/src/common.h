@@ -32,12 +32,12 @@ typedef char byte;
    3x3: AERO_WINDOW 3 and HALF_AERO_WINDOW 1
    1x1: AERO_WINDOW 1 and HALF_AERO_WINDOW 0
 */
-/*#define LAERO_WINDOW 3
+#define LAERO_WINDOW 3
 #define LHALF_AERO_WINDOW 1
-#define SAERO_WINDOW 6*/
-#define LAERO_WINDOW 1
+#define SAERO_WINDOW 6
+/*#define LAERO_WINDOW 1
 #define LHALF_AERO_WINDOW 0
-#define SAERO_WINDOW 1
+#define SAERO_WINDOW 1*/
 
 /* Define the size of the window used for fixing the invalid aerosols, using
    an average of the representative pixels in this window. Define the minimum
