@@ -127,11 +127,13 @@ def process_scene(
     result["aerosol"] = result["aerosol"].reshape(nlines, nsamps)
     result["qa"] = result["qa"].reshape(nlines, nsamps)
 
+    product_id = scene.get("product_id", "")
     if output_format == "espa":
         write_espa_output(output_path, result, sensor_config,
-                          crs=profile["crs"], transform=transform)
+                          crs=profile["crs"], transform=transform,
+                          product_id=product_id)
     elif output_format == "numpy":
-        write_numpy(output_path, result, sensor_config)
+        write_numpy(output_path, result, sensor_config, product_id=product_id)
     else:
         write_cog_output(output_path, result, sensor_config, profile)
 

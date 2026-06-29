@@ -17,6 +17,12 @@ def read_landsat_scene(scene_dir: str | Path) -> dict:
         raise FileNotFoundError(f"No MTL file found in {scene_dir}")
 
     metadata = _parse_landsat_mtl(mtl_files[0])
+    if "product_id" not in metadata:
+        raise ValueError(
+            f"MTL file {mtl_files[0].name} is missing the required "
+            f"LANDSAT_PRODUCT_ID field"
+        )
+    product_id = metadata["product_id"]
     band_files = sorted(scene_dir.glob("*_B*.TIF"))
 
     toa_bands = []
@@ -60,6 +66,7 @@ def read_landsat_scene(scene_dir: str | Path) -> dict:
         "angles": angles,
         "metadata": metadata,
         "profile": profile,
+        "product_id": product_id,
     }
 
 
@@ -99,6 +106,8 @@ def _parse_landsat_mtl(mtl_path):
                 metadata["sun_elevation"] = float(val)
             if key == "SUN_AZIMUTH":
                 metadata["sun_azimuth"] = float(val)
+            if key == "LANDSAT_PRODUCT_ID":
+                metadata["product_id"] = val.strip('"')
     return metadata
 
 
