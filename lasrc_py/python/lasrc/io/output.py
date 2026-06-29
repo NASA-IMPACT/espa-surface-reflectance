@@ -37,23 +37,28 @@ def _write_envi_band(path, data, crs, transform) -> None:
 
 
 def write_espa_output(output_dir: str | Path, result: dict,
-                      sensor_config: dict, crs, transform) -> None:
+                      sensor_config: dict, crs, transform,
+                      product_id: str = "") -> None:
     """Write output in ESPA internal format: one ENVI band per file.
 
     Each surface reflectance band, the aerosol band, and the aerosol QA band
     are written as separate ENVI files (flat binary ``.img`` with a ``.hdr``
     header), georeferenced via ``crs`` and ``transform``.
+
+    When ``product_id`` is given, each filename is prefixed with it, e.g.
+    ``LC08_L1TP_230094_20250102_20250110_02_T1_sr_band5.img``.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"{product_id}_" if product_id else ""
 
     for i, name in enumerate(sensor_config["refl_band_names"]):
         band = result["sr_bands"][i].astype(np.int16)
-        _write_envi_band(output_dir / f"{name}.img", band, crs, transform)
+        _write_envi_band(output_dir / f"{prefix}{name}.img", band, crs, transform)
 
-    _write_envi_band(output_dir / "sr_aerosol.img",
+    _write_envi_band(output_dir / f"{prefix}sr_aerosol.img",
                      result["aerosol"].astype(np.int16), crs, transform)
-    _write_envi_band(output_dir / "sr_aerosol_qa.img",
+    _write_envi_band(output_dir / f"{prefix}sr_aerosol_qa.img",
                      result["qa"].astype(np.uint8), crs, transform)
 
 
@@ -87,18 +92,14 @@ def write_cog_output(output_path: str | Path, result: dict,
 
 
 def write_numpy(output_dir: str | Path, result: dict,
-                sensor_config: dict) -> None:
-    """Write raw headerless flat binary ``.img`` files (ndarray.tofile).
-
-    This is NOT the ESPA format (no ENVI header, no georeferencing); it exists
-    only for compatibility with the analysis/test scripts that read the arrays
-    back directly. Use ``write_espa_output`` for real ESPA products.
-    """
+                sensor_config: dict, product_id: str = "") -> None:
+    """Write raw headerless flat binary ``.bin`` files (ndarray.tofile)."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"{product_id}_" if product_id else ""
 
     for i, name in enumerate(sensor_config["refl_band_names"]):
-        result["sr_bands"][i].astype(np.int16).tofile(output_dir / f"{name}.img")
+        result["sr_bands"][i].astype(np.int16).tofile(output_dir / f"{prefix}{name}.bin")
 
-    result["aerosol"].astype(np.int16).tofile(output_dir / "sr_aerosol.img")
-    result["qa"].astype(np.uint8).tofile(output_dir / "sr_aerosol_qa.img")
+    result["aerosol"].astype(np.int16).tofile(output_dir / f"{prefix}sr_aerosol.bin")
+    result["qa"].astype(np.uint8).tofile(output_dir / f"{prefix}sr_aerosol_qa.bin")

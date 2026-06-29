@@ -29,6 +29,11 @@ def process_sentinel_scene(
     sensor_config = SENSORS[sensor_name]
     nsr_bands = sensor_config["nsr_bands"]  # 13
 
+    # Product ID prefix for output filenames (SAFE directory name, sans .SAFE)
+    product_id = Path(safe_dir).name
+    if product_id.upper().endswith(".SAFE"):
+        product_id = product_id[: -len(".SAFE")]
+
     # Read SAFE archive
     scene = read_sentinel_safe(safe_dir)
     angles = scene["angles"]
@@ -86,9 +91,9 @@ def process_sentinel_scene(
             profile["pixel_size_x"], profile["pixel_size_y"],
         )
         write_espa_output(output_path, result, sensor_config,
-                          crs=crs, transform=transform)
+                          crs=crs, transform=transform, product_id=product_id)
     elif output_format == "numpy":
-        write_numpy(output_path, result, sensor_config)
+        write_numpy(output_path, result, sensor_config, product_id=product_id)
 
     return result
 
