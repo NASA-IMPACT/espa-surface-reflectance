@@ -37,8 +37,9 @@ def find_viirs_aux(lads_dir: Path, year: str, doy: str) -> Path:
 def main():
     parser = argparse.ArgumentParser(description="Run LaSRC on test Landsat 9 granule")
     parser.add_argument(
-        "--format", choices=["cog", "espa"], default="cog",
-        help="Output format: 'cog' for GeoTIFF (default), 'espa' for flat binary .img files",
+        "--format", choices=["espa", "cog", "numpy"], default="espa",
+        help="Output format: 'espa' for ENVI .img/.hdr (default), 'cog' for GeoTIFF, "
+             "'numpy' for raw flat binary .img files",
     )
     parser.add_argument(
         "--aux", type=Path, default=None,
@@ -66,6 +67,8 @@ def main():
 
     if args.format == "espa":
         output_path = TEST_DATA / "output_espa"
+    elif args.format == "numpy":
+        output_path = TEST_DATA / "output_numpy"
     else:
         output_path = TEST_DATA / "output_sr.tif"
 

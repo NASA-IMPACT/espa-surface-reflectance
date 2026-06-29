@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from lasrc.aux import load_auxiliary_data, load_dem, load_lut, load_ratio_file
-from lasrc.io import read_landsat_scene, write_cog_output, write_espa_output
+from lasrc.io import read_landsat_scene, write_cog_output, write_espa_output, write_numpy
 from lasrc.sensors import SENSORS
 
 import lasrc as _lasrc
@@ -52,7 +52,7 @@ def process_scene(
     sensor_name : str
         One of LANDSAT_8, LANDSAT_9, SENTINEL_2A, SENTINEL_2B, SENTINEL_2C.
     output_format : str
-        "cog" or "espa".
+        "cog", "espa", or "numpy".
     use_orig_aero : bool
         Use original aerosol algorithm (not yet implemented).
     """
@@ -128,8 +128,11 @@ def process_scene(
     result["qa"] = result["qa"].reshape(nlines, nsamps)
 
     if output_format == "espa":
-        write_espa_output(output_path, result, scene["metadata"], profile, sensor_config)
+        write_espa_output(output_path, result, sensor_config,
+                          crs=profile["crs"], transform=transform)
+    elif output_format == "numpy":
+        write_numpy(output_path, result, sensor_config)
     else:
-        write_cog_output(output_path, result, scene["metadata"], profile, sensor_config)
+        write_cog_output(output_path, result, sensor_config, profile)
 
     return result

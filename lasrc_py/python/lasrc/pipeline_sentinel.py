@@ -2,10 +2,11 @@
 
 from pathlib import Path
 
-import numpy as np
+from rasterio.crs import CRS
+from rasterio.transform import from_origin
 
 from lasrc.aux import load_auxiliary_data, load_dem, load_lut, load_ratio_file
-from lasrc.io_sentinel import read_sentinel_safe
+from lasrc.io import read_sentinel_safe, write_espa_output, write_numpy
 from lasrc.sensors import SENSORS
 
 import lasrc as _lasrc
@@ -79,19 +80,15 @@ def process_sentinel_scene(
     result["qa"] = result["qa"].reshape(nlines, nsamps)
 
     if output_format == "espa":
-        _write_espa_sentinel(output_path, result, sensor_config)
+        crs = CRS.from_epsg(profile["epsg"])
+        transform = from_origin(
+            profile["ul_x"], profile["ul_y"],
+            profile["pixel_size_x"], profile["pixel_size_y"],
+        )
+        write_espa_output(output_path, result, sensor_config,
+                          crs=crs, transform=transform)
+    elif output_format == "numpy":
+        write_numpy(output_path, result, sensor_config)
 
     return result
-
-
-def _write_espa_sentinel(output_dir, result, sensor_config):
-    """Write Sentinel SR output in ESPA format."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    for i, name in enumerate(sensor_config["refl_band_names"]):
-        result["sr_bands"][i].astype(np.uint16).tofile(output_dir / f"{name}.img")
-
-    result["aerosol"].astype(np.int16).tofile(output_dir / "sr_aerosol.img")
-    result["qa"].astype(np.uint8).tofile(output_dir / "sr_aerosol_qa.img")
 
