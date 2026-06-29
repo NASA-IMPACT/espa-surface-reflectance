@@ -25,8 +25,9 @@ import click
 @click.option("--sensor", default=None,
               type=click.Choice(["LANDSAT_8", "LANDSAT_9"]),
               help="Sensor name (auto-detected from input path if omitted)")
-@click.option("--output-format", default="cog", type=click.Choice(["cog", "espa"]),
-              help="Output format (default: cog)")
+@click.option("--output-format", default="espa", type=click.Choice(["espa", "cog", "numpy"]),
+              help="Output format: 'espa' ENVI .img/.hdr (default), 'cog' GeoTIFF, "
+                   "'numpy' raw flat binary")
 @click.option("--aux-source", default="VIIRS", type=click.Choice(["VIIRS", "MODIS"]),
               help="Auxiliary data source (default: VIIRS)")
 def landsat(input_path, output_path, angle_hdf, intref_hdf, transm_hdf, sphera_hdf,
@@ -81,8 +82,8 @@ def landsat(input_path, output_path, angle_hdf, intref_hdf, transm_hdf, sphera_h
 @click.option("--sensor", default=None,
               type=click.Choice(["SENTINEL_2A", "SENTINEL_2B", "SENTINEL_2C"]),
               help="Sensor name (auto-detected from input path if omitted)")
-@click.option("--output-format", default="espa", type=click.Choice(["espa"]),
-              help="Output format (default: espa)")
+@click.option("--output-format", default="espa", type=click.Choice(["espa", "numpy"]),
+              help="Output format: 'espa' ENVI .img/.hdr (default), 'numpy' raw flat binary")
 def sentinel(input_path, output_path, angle_hdf, intref_hdf, transm_hdf, sphera_hdf,
              wv_oz_hdf, dem_hdf, ratio_hdf, sensor, output_format):
     """LaSRC: Compute Sentinel-2 surface reflectance."""

@@ -1,4 +1,4 @@
-"""Scene I/O: read input scenes and write output products."""
+"""Landsat Level-1 scene input: read GeoTIFF bands, MTL metadata, angles."""
 
 from pathlib import Path
 
@@ -115,48 +115,3 @@ def _read_landsat_angles(scene_dir, metadata):
         return angles
     else:
         return {"sun_elevation": metadata.get("sun_elevation", 45.0)}
-
-
-def write_espa_output(output_dir: str | Path, result: dict,
-                      metadata: dict, profile: dict,
-                      sensor_config: dict) -> None:
-    """Write output in ESPA internal format (flat binary + XML)."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    for i, name in enumerate(sensor_config["refl_band_names"]):
-        band_data = result["sr_bands"][i]
-        band_data.tofile(output_dir / f"{name}.img")
-
-    result["aerosol"].tofile(output_dir / "sr_aerosol.img")
-    result["qa"].tofile(output_dir / "sr_aerosol_qa.img")
-
-
-def write_cog_output(output_path: str | Path, result: dict,
-                     metadata: dict, profile: dict,
-                     sensor_config: dict) -> None:
-    """Write output as Cloud-Optimized GeoTIFF."""
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    nbands = len(result["sr_bands"])
-
-    cog_profile = profile.copy()
-    cog_profile.update(
-        driver="GTiff",
-        dtype="int16",
-        count=nbands + 2,
-        compress="deflate",
-        tiled=True,
-        blockxsize=512,
-        blockysize=512,
-    )
-
-    with rasterio.open(output_path, "w", **cog_profile) as dst:
-        for i, band in enumerate(result["sr_bands"]):
-            dst.write(band.astype(np.int16), i + 1)
-            dst.set_band_description(i + 1, sensor_config["refl_band_names"][i])
-        dst.write(result["aerosol"].astype(np.int16), nbands + 1)
-        dst.set_band_description(nbands + 1, "sr_aerosol")
-        dst.write(result["qa"].astype(np.uint8), nbands + 2)
-        dst.set_band_description(nbands + 2, "sr_aerosol_qa")
