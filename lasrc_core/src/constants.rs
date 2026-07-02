@@ -65,6 +65,11 @@ pub const NREFLL_BANDS: usize = 7;
 pub const NSRL_BANDS: usize = 8;
 pub const NBANDL_THM: usize = 2;
 
+// Landsat output-band index for the cirrus band (B9). Not atmospherically
+// corrected; the TOA reflectance is copied through instead, matching C's
+// SRL_BAND9 handling in lasrc.c.
+pub const SRL_BAND9: usize = 7;
+
 // Reflectance valid range
 pub const MIN_VALID_REFL: f64 = -0.2;
 pub const MAX_VALID_REFL: f64 = 1.60;
