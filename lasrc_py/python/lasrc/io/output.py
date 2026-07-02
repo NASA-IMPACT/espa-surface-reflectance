@@ -18,8 +18,10 @@ from pathlib import Path
 import numpy as np
 import rasterio
 
+from lasrc.lasrc import SR_FILL_VALUE
 
-def _write_envi_band(path, data, crs, transform) -> None:
+
+def _write_envi_band(path, data, crs, transform, nodata=None) -> None:
     """Write a single 2-D array as a georeferenced ENVI band (.img + .hdr)."""
     height, width = data.shape
     with rasterio.open(
@@ -32,6 +34,7 @@ def _write_envi_band(path, data, crs, transform) -> None:
         dtype=data.dtype,
         crs=crs,
         transform=transform,
+        nodata=nodata,
     ) as dst:
         dst.write(data, 1)
 
@@ -54,7 +57,8 @@ def write_espa_output(output_dir: str | Path, result: dict,
 
     for i, name in enumerate(sensor_config["refl_band_names"]):
         band = result["sr_bands"][i].astype(np.int16)
-        _write_envi_band(output_dir / f"{prefix}{name}.img", band, crs, transform)
+        _write_envi_band(output_dir / f"{prefix}{name}.img", band, crs, transform,
+                         nodata=SR_FILL_VALUE)
 
     _write_envi_band(output_dir / f"{prefix}sr_aerosol.img",
                      result["aerosol"].astype(np.int16), crs, transform)
@@ -79,6 +83,7 @@ def write_cog_output(output_path: str | Path, result: dict,
         tiled=True,
         blockxsize=512,
         blockysize=512,
+        nodata=SR_FILL_VALUE,
     )
 
     with rasterio.open(output_path, "w", **cog_profile) as dst:

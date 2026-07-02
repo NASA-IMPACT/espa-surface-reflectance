@@ -89,6 +89,9 @@ pub const SCALE_FACTOR_AERO: f64 = 0.001;
 pub const MULT_FACTOR_AERO: f64 = 1000.0;
 pub const AERO_FILL: i16 = -9999;
 
+// Fill/nodata value written into output SR and BT bands for fill pixels.
+pub const SR_FILL_VALUE: u16 = 0;
+
 // AOT values at 550nm (22 values)
 pub const AOT550NM: [f64; NAOT_VALS] = [
     0.01, 0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.60,
