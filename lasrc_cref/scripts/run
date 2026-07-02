@@ -1,0 +1,60 @@
+#!/bin/bash
+# Run the lasrc_cref harness image with local source bind-mounted, so code edits
+# take effect without rebuilding (cargo recompiles in-container). Only source
+# paths are mounted -- NOT all of lasrc_cref/ -- so the image's pixi env
+# (lasrc_cref/.pixi), target/ cache, and lockfiles survive.
+#
+#   scripts/run                     # leaf differential tests (pixi run test-lut)
+#   scripts/run pixi run test-leaf  # stage 0 only
+#   scripts/run bash                # interactive shell
+#
+# readluts IO cross-check: set LASRC_AUX_DIR to the aux root (the dir holding
+# LDCMLUT/) and run with no args. It mounts the aux dir, dumps the C readluts
+# arrays to lasrc_cref/_dump, which the host then diffs with
+# tools/compare_readluts.py. Aux filenames default to the V2.0 LDCMLUT set;
+# override via LASRC_ANGLE / LASRC_INTREF / LASRC_TRANSM / LASRC_SPHERA.
+set -e
+
+IMAGE_NAME="${IMAGE_NAME:-lasrc-cref}"
+TAG="${TAG:-latest}"
+ROOT=$(git rev-parse --show-toplevel)
+
+DOCKER_ARGS=(--rm --platform linux/amd64)
+[ -t 0 ] && DOCKER_ARGS+=(-it)
+
+# Reflect local code changes. Paths mirror the image layout under /app.
+DOCKER_ARGS+=(
+    -v "$ROOT/lasrc_core:/app/lasrc_core"
+    -v "$ROOT/lasrc/c_version/src:/app/lasrc/c_version/src"
+    -v "$ROOT/lasrc_cref/src:/app/lasrc_cref/src"
+    -v "$ROOT/lasrc_cref/tests:/app/lasrc_cref/tests"
+    -v "$ROOT/lasrc_cref/build.rs:/app/lasrc_cref/build.rs"
+    -v "$ROOT/lasrc_cref/Cargo.toml:/app/lasrc_cref/Cargo.toml"
+)
+
+# readluts IO cross-check wiring (only when an aux root is given).
+CMD=()
+if [ -n "${LASRC_AUX_DIR:-}" ]; then
+    LUT_SUBDIR="${LASRC_LUT_SUBDIR:-LDCMLUT}"
+    ANGLE="${LASRC_ANGLE:-ANGLE_NEW.hdf}"
+    INTREF="${LASRC_INTREF:-RES_LUT_V3.0-URBANCLEAN-V2.0.hdf}"
+    TRANSM="${LASRC_TRANSM:-TRANS_LUT_V3.0-URBANCLEAN-V2.0.ASCII}"
+    SPHERA="${LASRC_SPHERA:-AERO_LUT_V3.0-URBANCLEAN-V2.0.ASCII}"
+    mkdir -p "$ROOT/lasrc_cref/_dump"
+    DOCKER_ARGS+=(
+        -v "$LASRC_AUX_DIR:/aux:ro"
+        -v "$ROOT/lasrc_cref/_dump:/dump"
+        -e "CREF_ANGLE=/aux/$LUT_SUBDIR/$ANGLE"
+        -e "CREF_INTREF=/aux/$LUT_SUBDIR/$INTREF"
+        -e "CREF_TRANSM=/aux/$LUT_SUBDIR/$TRANSM"
+        -e "CREF_SPHERA=/aux/$LUT_SUBDIR/$SPHERA"
+        -e "CREF_DUMP_DIR=/dump"
+    )
+    # PREFIX (for build.rs) = the activated pixi env prefix.
+    CMD=(pixi run bash -lc 'PREFIX=$CONDA_PREFIX cargo test --features lut dump_c_readluts -- --nocapture')
+fi
+
+# Explicit args override everything; else the aux-dump command; else image CMD.
+[ "$#" -gt 0 ] && CMD=("$@")
+
+docker run "${DOCKER_ARGS[@]}" "$IMAGE_NAME:$TAG" "${CMD[@]}"

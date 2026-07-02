@@ -1,0 +1,32 @@
+# Dedicated pixi env for the C-vs-Rust differential harness. Pulls only the
+# conda packages needed to compile the ESPA/HDF-dependent C leaves (stage 1+):
+# espa-product-formatter supplies espa_*.h / error_handler.h and the hdf
+# headers+libs. The leaf C sources themselves are compiled from this repo's
+# ../lasrc/c_version/src tree (not from the espa-surface-reflectance package).
+#
+# Stage 0 (quick_select) needs none of this -- run `cargo test` directly with
+# any Rust toolchain. Use this env (or a container built from it) for stage 1+.
+[workspace]
+name = "lasrc-cref"
+channels = ["conda-forge", "s3://hls-conda-channels"]
+# C packages are built for linux-64 only; on macOS run stage 1+ in a container.
+platforms = ["linux-64"]
+
+[dependencies]
+espa-product-formatter = "=3.5.0"
+# Reference binary, handy for optional end-to-end checks; not required to
+# compile the leaf functions.
+espa-surface-reflectance = "=v3.5.1.0"
+rust = "*"
+c-compiler = "*"
+make = "*"
+# espa_metadata.h includes <libxml/parser.h>.
+libxml2 = "*"
+
+[tasks]
+# Stage 0: zero-dependency leaves (also runs without pixi).
+test-leaf = "cargo test"
+# Stage 1+: ESPA/HDF-dependent leaves. PREFIX points cc at the activated env so
+# the C headers/libs resolve; running inside the env also gives cc the same
+# $CC/$CFLAGS used for the shipped binary.
+test-lut = { cmd = "cargo test --features lut", env = { PREFIX = "$CONDA_PREFIX" } }
