@@ -919,25 +919,33 @@ pub fn compute_surface_reflectance(
                 let eps = teps[pix] as f64;
 
                 for iband in 0..nbands {
-                    // Reconstruct TOA from climatological SR
-                    let rsurf = sband[iband][pix]; // f32
-                    let rotoa: f32 = ((rsurf as f64 * bttatmg[iband]
-                        / (1.0 - bsatm[iband] * rsurf as f64)
-                        + broatm[iband])
-                        * btgo[iband]) as f32;
+                    let roslamb = if iband == SRL_BAND9 {
+                        // Cirrus band: not atmospherically corrected, just
+                        // TOA reflectance normalized by cos(SZA). Matches
+                        // C's SRL_BAND9 handling in lasrc.c.
+                        let xmus = (solar_zenith[(iline, isamp)] as f64 * DEG2RAD).cos();
+                        (toa_bands[iband][(iline, isamp)] as f64 / xmus)
+                            .clamp(MIN_VALID_REFL, MAX_VALID_REFL)
+                    } else {
+                        // Reconstruct TOA from climatological SR
+                        let rsurf = sband[iband][pix]; // f32
+                        let rotoa: f32 = ((rsurf as f64 * bttatmg[iband]
+                            / (1.0 - bsatm[iband] * rsurf as f64)
+                            + broatm[iband])
+                            * btgo[iband]) as f32;
 
-                    let roslamb = atmcorlamb2_new(
-                        &atm_coeff[iband],
-                        tgo_arr[iband],
-                        iband,
-                        raot,
-                        normext_p0a3[iband],
-                        rotoa as f64,
-                        lambda,
-                        eps,
-                    );
-
-                    let roslamb = roslamb.clamp(MIN_VALID_REFL, MAX_VALID_REFL);
+                        atmcorlamb2_new(
+                            &atm_coeff[iband],
+                            tgo_arr[iband],
+                            iband,
+                            raot,
+                            normext_p0a3[iband],
+                            rotoa as f64,
+                            lambda,
+                            eps,
+                        )
+                        .clamp(MIN_VALID_REFL, MAX_VALID_REFL)
+                    };
 
                     // SAFETY: Each iline is processed by exactly one thread
                     // (Rayon's into_par_iter guarantees this). Within a thread,
