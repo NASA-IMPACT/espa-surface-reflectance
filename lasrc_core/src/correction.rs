@@ -995,7 +995,7 @@ pub fn compute_surface_reflectance(
             Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
                 let pix = i * nsamps + j;
                 if is_fill_pixel(qa_flat[pix]) {
-                    0u16
+                    SR_FILL_VALUE
                 } else {
                     let sband_f32 = band[pix] as f32;
                     let tmpf = (sband_f32 + offset_f32) * mult_f32;
@@ -1012,7 +1012,7 @@ pub fn compute_surface_reflectance(
             let arr: Array2<u16> = Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
                 let val = bt[(i, j)] as f64;
                 if val < MIN_VALID_TH || val > MAX_VALID_TH {
-                    0u16
+                    SR_FILL_VALUE
                 } else {
                     ((val - BAND_OFFSET_TH) * MULT_FACTOR_TH)
                         .round()
@@ -1659,7 +1659,7 @@ pub fn compute_sentinel_surface_reflectance(
             Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
                 let pix = i * nsamps + j;
                 if is_fill_pixel(qaband[pix]) {
-                    0u16
+                    SR_FILL_VALUE
                 } else {
                     let sband_f32 = band[pix] as f32;
                     let tmpf = (sband_f32 + offset_f32) * mult_f32;
