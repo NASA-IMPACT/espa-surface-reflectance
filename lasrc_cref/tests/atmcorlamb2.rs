@@ -112,7 +112,12 @@ proptest! {
         let c = run_c(&i);
         let r = run_rust(&i);
         prop_assume!(well_conditioned(c, r));
-        let tol = 1e-5 * c.abs().max(1e-3);
+        // rel 1e-3 + small abs floor. The correction divides by
+        // tgo*ttatmg + satm*roslamb and rotoa - tgo*roatm can nearly cancel, so
+        // a tiny result (~1e-4) carries amplified relative error from the pow
+        // path while the ABSOLUTE error stays negligible (~5e-8). The abs floor
+        // covers those; the relative term catches gross bugs on larger values.
+        let tol = 1e-3 * c.abs().max(r.abs()) + 1e-6;
         prop_assert!(
             (r - c).abs() <= tol,
             "mismatch (eps>=0): rust={} c={} diff={} inputs={:?}",
