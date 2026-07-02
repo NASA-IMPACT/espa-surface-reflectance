@@ -113,8 +113,11 @@ pub fn subaeroret_new(
                     // C: point_error = roslamb - erelc[ib] * ros1 (double)
                     // roslamb is float promoted to double, erelc[ib] is float promoted to double
                     let point_error: f64 = roslamb as f64 - (erelc[ib] as f32 as f64) * ros1;
-                    // C: *residual += point_error * point_error (float += double)
-                    residual += (point_error * point_error) as f32;
+                    // C: *residual += point_error * point_error  (float += double)
+                    // The accumulation happens in double (float promoted), then
+                    // the sum is rounded back to float -- NOT the term rounded
+                    // first. Match that ordering.
+                    residual = (residual as f64 + point_error * point_error) as f32;
                     nbval += 1;
                 }
             }
