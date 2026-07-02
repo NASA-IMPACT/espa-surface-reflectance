@@ -1,0 +1,42 @@
+#!/bin/bash
+# Build the lasrc_cref differential-harness image. Mirrors
+# hls-science-container/scripts/build: exports whatever AWS creds are configured
+# (SSO, profile, env) and passes them as build secrets so pixi can fetch
+# espa-product-formatter / espa-surface-reflectance from s3://hls-conda-channels.
+# The session-token secret is only added when a token exists (short-lived creds).
+set -e
+
+IMAGE_NAME="${IMAGE_NAME:-lasrc-cref}"
+TAG="${TAG:-latest}"
+
+# Build context is the repo root; Dockerfile lives in lasrc_cref/.
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT"
+
+export DOCKER_BUILDKIT=1
+
+BUILD_ARGS=(
+    --tag "$IMAGE_NAME:$TAG"
+    --file lasrc_cref/Dockerfile
+    --build-arg "PLATFORM=linux/amd64"
+)
+
+# Export credentials from whatever source is configured (SSO, profiles, env).
+eval "$(aws configure export-credentials --format env 2>/dev/null)" || \
+    echo "WARNING: no AWS creds; private conda channel fetch will fail"
+
+if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+    BUILD_ARGS+=(
+        --secret "id=aws_access_key_id,env=AWS_ACCESS_KEY_ID"
+        --secret "id=aws_secret_access_key,env=AWS_SECRET_ACCESS_KEY"
+    )
+    # Only present with temporary (SSO/STS) credentials.
+    [ -n "${AWS_SESSION_TOKEN:-}" ] && \
+        BUILD_ARGS+=( --secret "id=aws_session_token,env=AWS_SESSION_TOKEN" )
+fi
+
+BUILD_ARGS+=( . )
+
+echo "Building $IMAGE_NAME:$TAG ..."
+docker buildx build "${BUILD_ARGS[@]}"
+echo "Done. Run: docker run --rm $IMAGE_NAME:$TAG"
