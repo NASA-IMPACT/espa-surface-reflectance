@@ -9,8 +9,9 @@ Three formats are supported, all driven by the same in-memory ``result`` dict
   - NumPy raw            : headerless flat binary ``.img`` files (``ndarray.tofile``),
     kept only for compatibility with the analysis/test scripts.
 
-Output dtypes follow the ESPA convention: surface reflectance and aerosol are
-int16, the aerosol QA band is uint8.
+Output dtypes match the C reference exactly: surface reflectance (and
+brightness temperature) bands are uint16, the aerosol band is int16, and the
+aerosol QA band is uint8.
 """
 
 from pathlib import Path
@@ -18,16 +19,16 @@ from pathlib import Path
 import numpy as np
 import rasterio
 
-from lasrc.lasrc import SR_FILL_VALUE
+from lasrc.lasrc import AERO_FILL, SR_FILL_VALUE
 
 
-def _write_envi_band(path, data, crs, transform, nodata=None) -> None:
-    """Write a single 2-D array as a georeferenced ENVI band (.img + .hdr)."""
+def _write_band(path, data, crs, transform, driver, nodata=None, **creation_opts) -> None:
+    """Write a single 2-D array as a georeferenced raster band."""
     height, width = data.shape
     with rasterio.open(
         path,
         "w",
-        driver="ENVI",
+        driver=driver,
         width=width,
         height=height,
         count=1,
@@ -35,6 +36,7 @@ def _write_envi_band(path, data, crs, transform, nodata=None) -> None:
         crs=crs,
         transform=transform,
         nodata=nodata,
+        **creation_opts,
     ) as dst:
         dst.write(data, 1)
 
@@ -56,44 +58,45 @@ def write_espa_output(output_dir: str | Path, result: dict,
     prefix = f"{product_id}_" if product_id else ""
 
     for i, name in enumerate(sensor_config["refl_band_names"]):
-        band = result["sr_bands"][i].astype(np.int16)
-        _write_envi_band(output_dir / f"{prefix}{name}.img", band, crs, transform,
-                         nodata=SR_FILL_VALUE)
+        band = result["sr_bands"][i].astype(np.uint16)
+        _write_band(output_dir / f"{prefix}{name}.img", band, crs, transform,
+                    driver="ENVI", nodata=SR_FILL_VALUE)
 
-    _write_envi_band(output_dir / f"{prefix}sr_aerosol.img",
-                     result["aerosol"].astype(np.int16), crs, transform)
-    _write_envi_band(output_dir / f"{prefix}sr_aerosol_qa.img",
-                     result["qa"].astype(np.uint8), crs, transform)
+    _write_band(output_dir / f"{prefix}sr_aerosol.img",
+               result["aerosol"].astype(np.int16), crs, transform,
+               driver="ENVI", nodata=AERO_FILL)
+    _write_band(output_dir / f"{prefix}sr_aerosol_qa.img",
+               result["qa"].astype(np.uint8), crs, transform,
+               driver="ENVI")
 
 
-def write_cog_output(output_path: str | Path, result: dict,
-                     sensor_config: dict, profile: dict) -> None:
-    """Write output as a single multi-band Cloud-Optimized GeoTIFF."""
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+_COG_CREATION_OPTS = dict(compress="deflate", tiled=True, blockxsize=512, blockysize=512)
 
-    nbands = len(result["sr_bands"])
 
-    cog_profile = profile.copy()
-    cog_profile.update(
-        driver="GTiff",
-        dtype="int16",
-        count=nbands + 2,
-        compress="deflate",
-        tiled=True,
-        blockxsize=512,
-        blockysize=512,
-        nodata=SR_FILL_VALUE,
-    )
+def write_cog_output(output_dir: str | Path, result: dict,
+                     sensor_config: dict, crs, transform,
+                     product_id: str = "") -> None:
+    """Write output as one Cloud-Optimized GeoTIFF per band.
 
-    with rasterio.open(output_path, "w", **cog_profile) as dst:
-        for i, band in enumerate(result["sr_bands"]):
-            dst.write(band.astype(np.int16), i + 1)
-            dst.set_band_description(i + 1, sensor_config["refl_band_names"][i])
-        dst.write(result["aerosol"].astype(np.int16), nbands + 1)
-        dst.set_band_description(nbands + 1, "sr_aerosol")
-        dst.write(result["qa"].astype(np.uint8), nbands + 2)
-        dst.set_band_description(nbands + 2, "sr_aerosol_qa")
+    Mirrors write_espa_output's one-file-per-band layout (and the C
+    reference's per-band native dtypes: uint16 SR/BT, int16 aerosol, uint8
+    QA), just using the GTiff/COG driver instead of ENVI.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"{product_id}_" if product_id else ""
+
+    for i, name in enumerate(sensor_config["refl_band_names"]):
+        band = result["sr_bands"][i].astype(np.uint16)
+        _write_band(output_dir / f"{prefix}{name}.tif", band, crs, transform,
+                    driver="GTiff", nodata=SR_FILL_VALUE, **_COG_CREATION_OPTS)
+
+    _write_band(output_dir / f"{prefix}sr_aerosol.tif",
+               result["aerosol"].astype(np.int16), crs, transform,
+               driver="GTiff", nodata=AERO_FILL, **_COG_CREATION_OPTS)
+    _write_band(output_dir / f"{prefix}sr_aerosol_qa.tif",
+               result["qa"].astype(np.uint8), crs, transform,
+               driver="GTiff", **_COG_CREATION_OPTS)
 
 
 def write_numpy(output_dir: str | Path, result: dict,
@@ -104,7 +107,7 @@ def write_numpy(output_dir: str | Path, result: dict,
     prefix = f"{product_id}_" if product_id else ""
 
     for i, name in enumerate(sensor_config["refl_band_names"]):
-        result["sr_bands"][i].astype(np.int16).tofile(output_dir / f"{prefix}{name}.bin")
+        result["sr_bands"][i].astype(np.uint16).tofile(output_dir / f"{prefix}{name}.bin")
 
     result["aerosol"].astype(np.int16).tofile(output_dir / f"{prefix}sr_aerosol.bin")
     result["qa"].astype(np.uint8).tofile(output_dir / f"{prefix}sr_aerosol_qa.bin")
