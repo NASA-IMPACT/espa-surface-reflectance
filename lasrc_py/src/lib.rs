@@ -2,7 +2,7 @@ use numpy::{IntoPyArray, PyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use lasrc_core::constants::{NSOLAR_ZEN_VALS, SR_FILL_VALUE};
+use lasrc_core::constants::{AERO_FILL, NSOLAR_ZEN_VALS, SR_FILL_VALUE};
 use lasrc_core::correction::{AuxiliaryData, compute_surface_reflectance, compute_sentinel_surface_reflectance};
 use lasrc_core::geometry::SpaceDef;
 use lasrc_core::lut::LookupTables;
@@ -321,6 +321,7 @@ fn process_sentinel_surface_reflectance<'py>(
 fn lasrc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", "0.1.0")?;
     m.add("SR_FILL_VALUE", SR_FILL_VALUE)?;
+    m.add("AERO_FILL", AERO_FILL)?;
     m.add_class::<PyLookupTables>()?;
     m.add_class::<PyAuxiliaryData>()?;
     m.add_function(wrap_pyfunction!(process_surface_reflectance, m)?)?;
