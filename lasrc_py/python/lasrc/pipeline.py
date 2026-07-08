@@ -135,6 +135,8 @@ def process_scene(
     elif output_format == "numpy":
         write_numpy(output_path, result, sensor_config, product_id=product_id)
     else:
-        write_cog_output(output_path, result, sensor_config, profile)
+        write_cog_output(output_path, result, sensor_config,
+                         crs=profile["crs"], transform=transform,
+                         product_id=product_id)
 
     return result
