@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc dcb109f5de6ff0457a92db483dc42d1f74c1ac33de8da51d5fbc6e8f9b37f61f # shrinks to water = true, iband1 = 0, erelc = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05], troatm = [0.0, 0.0, 0.0, 0.0, 0.0, 0.28404066, 0.0], tgo = [0.5, 0.5, 0.5, 0.5, 0.5, 0.69194365, 0.5], ia_max = [0, 0, 0, 0, 0, 1, 0], roatm_coef = [[0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, -0.018132731, 0.027515925, 0.84818345], [0.0, 0.0, 0.0, 0.0]], ttatmg_coef = [[0.0, 0.0, 0.0, 0.13486637], [0.0, 0.0, 0.0, 0.22819315], [0.0, 0.0, 0.0, 0.7011478], [0.0, 0.0, 0.0, 0.30000824], [0.0, 0.0, 0.0, 0.40379673], [0.12965235, 0.24256095, 0.13210131, 0.10013456], [0.0, 0.0, 0.0, 0.27349913]], satm_coef = [[0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, -0.010363415, -0.03868372, 0.23447481], [0.0, 0.0, 0.0, 0.0]], normext = [0.5, 0.5, 0.5, 0.5, 0.5, 0.95531756, 0.5], iaots_in = 2, eps = 1.5243617

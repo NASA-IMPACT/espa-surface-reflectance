@@ -27,6 +27,7 @@ DOCKER_ARGS+=(
     -v "$ROOT/lasrc_core:/app/lasrc_core"
     -v "$ROOT/lasrc/c_version/src:/app/lasrc/c_version/src"
     -v "$ROOT/lasrc_cref/src:/app/lasrc_cref/src"
+    -v "$ROOT/lasrc_cref/csrc:/app/lasrc_cref/csrc"
     -v "$ROOT/lasrc_cref/tests:/app/lasrc_cref/tests"
     -v "$ROOT/lasrc_cref/build.rs:/app/lasrc_cref/build.rs"
     -v "$ROOT/lasrc_cref/Cargo.toml:/app/lasrc_cref/Cargo.toml"

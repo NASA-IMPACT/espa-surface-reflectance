@@ -215,6 +215,44 @@ pub fn c_subaeroret_new(
     CAeroResult { raot, residual, iaots }
 }
 
+#[cfg(feature = "lut")]
+extern "C" {
+    /// cref shim over C `aerosol_interp_landsat` (csrc/shims.c): bilinear fill of
+    /// taero/ipflag from window centers. Mutates `ipflag` and `taero` in place.
+    fn cref_aerosol_interp_landsat(
+        aero_window: c_int,
+        half_aero_window: c_int,
+        qaband: *const u16,
+        ipflag: *mut u8,
+        taero: *mut f32,
+        nlines: c_int,
+        nsamps: c_int,
+    );
+}
+
+/// Window-center aerosol interpolation via the original C
+/// `aerosol_interp_landsat`. Mutates `ipflag` and `taero` in place.
+#[cfg(feature = "lut")]
+#[allow(clippy::too_many_arguments)]
+pub fn c_aerosol_interp_landsat(
+    qaband: &[u16],
+    ipflag: &mut [u8],
+    taero: &mut [f32],
+    nlines: usize,
+    nsamps: usize,
+    aero_window: usize,
+    half_aero_window: usize,
+) {
+    // SAFETY: all three arrays are nlines*nsamps long, matching the C contract.
+    unsafe {
+        cref_aerosol_interp_landsat(
+            aero_window as c_int, half_aero_window as c_int,
+            qaband.as_ptr(), ipflag.as_mut_ptr(), taero.as_mut_ptr(),
+            nlines as c_int, nsamps as c_int,
+        );
+    }
+}
+
 // ---- LUT loading cross-check: C readluts vs Python lasrc.aux.load_lut ----
 // Landsat-sized (nsr_bands = 8). C readluts writes only bands 0..7 for Landsat,
 // so these buffers match the Python load_lut output layout exactly.
