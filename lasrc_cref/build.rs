@@ -44,11 +44,20 @@ fn main() {
         // libxml2 headers live in their own subdir (espa build: XML2INC=.../include/libxml2).
         build.include(format!("{prefix}/include/libxml2"));
 
-        let stage1 = ["poly_coeff.c", "lut_subr.c", "subaeroret.c"];
+        let stage1 = [
+            "poly_coeff.c", "lut_subr.c", "subaeroret.c",
+            // aero_interp; its level1/lasrc_qa symbols resolve from
+            // lib_espa_common (linked below), not compiled here.
+            "aero_interp.c",
+        ];
         for f in stage1 {
             build.file(c_src.join(f));
             println!("cargo:rerun-if-changed={}", c_src.join(f).display());
         }
+        // cref-owned shim (zeroed-meta wrapper for aerosol_interp_landsat).
+        let shim = "csrc/shims.c";
+        build.file(shim);
+        println!("cargo:rerun-if-changed={shim}");
 
         // lut_subr.c's (test-unused) table readers reference HDF4/HDF5; link
         // them so those symbols resolve. Adjust the list if the env's library
