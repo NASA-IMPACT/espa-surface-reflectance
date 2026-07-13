@@ -592,6 +592,7 @@ int compute_landsat_sr_refl
            scene (using the DEM) (pres)
        water vapor is initialized to the value at the center of the scene (uwv)
        ozone is initialized to the value at the center of the scene (uoz) */
+     */
     retval = init_sr_refl (nlines, nsamps, input, &space_def, space, anglehdf,
         intrefnm, transmnm, spheranm, cmgdemnm, rationm, auxnm, aux_src, &eps,
         &iaots, &xtv_center, &xmuv_center, &xfi_center, &cosxfi_center,
@@ -617,8 +618,8 @@ int compute_landsat_sr_refl
        roslamb value is not valid upon output. Just set it to 0.0 to be
        consistent. */
     rotoa = 0.0;
-    raot550nm = aot550nm[1];
-    eps = 2.5;
+    raot550nm = aot550nm[1];	/* JJU, 2027-07-11: overwritten */
+    eps = 2.5;			/* JJU, 2027-07-11: overwritten */
     for (ib = 0; ib <= SRL_BAND7; ib++)
     {
         /* Get the parameters for the atmospheric correction */

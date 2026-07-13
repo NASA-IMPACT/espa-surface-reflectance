@@ -21,6 +21,10 @@ char SENTINEL_FULL_BANDNAME[SENTINEL_TTL][3] =
     {"1", "2", "3", "4", "5", "6", "7", "8", "8a", "9", "10", "11", "12"};
 
 /* Removed bands 9 and 10 from the Sentinel array */
+/* Junchang Ju, 2026-07-09: The green band center 0.585 is quite different from USGS/NASA published value 0.56. The
+ * value was later in: mraot550nm = (raot550nm / normext_ib_0_3) *
+            pow (lambda[iband] * lambda_sf, -eps);
+ *  */
 float landsat_lambda[NREFLL_BANDS] =
     {0.443, 0.480, 0.585, 0.655, 0.865, 1.61, 2.2};
 
@@ -1040,7 +1044,7 @@ int readluts
     for (i = 0; i < NVIEW_ZEN_VALS * NSOLAR_ZEN_VALS; i++)
         nbfic[i] = 0.0;
     for (j = 0; j < NSUNANGLE_VALS; j++)
-        tts[j] = xtsmin + xtsstep * j;
+        tts[j] = xtsmin + xtsstep * j;	 /* JJU, 2027-07-11: Why is tts initialized here? Later it will hold the content of TTS SDS */
 
     /* Open as HDF file for reading */
     sd_id = SDstart (anglehdf, DFACC_RDONLY);
@@ -1261,6 +1265,8 @@ int readluts
         error_handler (true, FUNC_NAME, errmsg);
         return (ERROR);
     }
+    /* Junchang Ju, 2026-07-11: The above five arrays -- tsmax, tsmin, ttv, nbfi, nbfic -- could be
+        read by one function call each, without a loop. */
 
     /* Find the INDTS SDS */
     sds_index = SDnametoindex (sd_id, "INDTS");
@@ -1280,6 +1286,7 @@ int readluts
         return (ERROR);
     }
 
+	/* Junchang Ju, 2026-07-09: The source SDS is in fact 1-D of 22 elements, not 2-D */
     start[0] = 0;   /* lines */
     start[1] = 0;   /* samples */
     edges[0] = 20;  /* number of lines */
@@ -1319,6 +1326,8 @@ int readluts
         return (ERROR);
     }
 
+	/* Junchang Ju, 2026-07-09: The source SDS is in fact 1-D of 22 elements, not 2-D */
+    start[0] = 0;   /* lines */
     start[0] = 0;   /* lines */
     start[1] = 0;   /* samples */
     edges[0] = 20;  /* number of lines */
