@@ -457,19 +457,26 @@ fn precompute_coefficients(
 /// 4. Fixes invalid aerosols, interpolates
 /// 5. Applies final per-pixel correction with retrieved aerosol
 /// 6. Scales to output integers
+///
+/// `scene_solar_zenith` is the scene solar zenith from the product metadata
+/// (90 - MTL SUN_ELEVATION), which C uses for the scene-center coefficients. When
+/// `None`, the center pixel of `solar_zenith` is used instead. The per-pixel
+/// azimuth and view zenith grids are only needed by the original aerosol
+/// algorithm (`use_orig_aero`), which is not implemented.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_surface_reflectance(
     sensor: &dyn Sensor,
     toa_bands: &[ArrayView2<f32>],
     bt_bands: &[ArrayView2<f32>],
     solar_zenith: &ArrayView2<f32>,
-    solar_azimuth: &ArrayView2<f32>,
-    view_zenith: &ArrayView2<f32>,
-    view_azimuth: &ArrayView2<f32>,
+    _solar_azimuth: &ArrayView2<f32>,
+    _view_zenith: &ArrayView2<f32>,
+    _view_azimuth: &ArrayView2<f32>,
     qa_band: &ArrayView2<u16>,
     lut: &LookupTables,
     aux: &AuxiliaryData,
     space_def: &SpaceDef,
+    scene_solar_zenith: Option<f32>,
     _use_orig_aero: bool,
     num_threads: Option<usize>,
 ) -> SurfaceReflectanceResult {
@@ -490,21 +497,18 @@ pub fn compute_surface_reflectance(
         utm_to_deg(space_def, center_line_geo, center_samp_geo);
     let (pressure, uoz, uwv) = extract_atm_params_scene_center(aux, scene_center_lat, scene_center_lon);
 
-    // Scene-center geometry (use center pixel angles)
-    let center_line = nlines / 2;
-    let center_samp = nsamps / 2;
-    let xts_center = solar_zenith[(center_line, center_samp)] as f64;
-    let xtv_center = view_zenith[(center_line, center_samp)] as f64;
-    let xmus_center = (xts_center * DEG2RAD).cos();
-    let xmuv_center = (xtv_center * DEG2RAD).cos();
-    let xfi_center = (view_azimuth[(center_line, center_samp)]
-        - solar_azimuth[(center_line, center_samp)])
-        .abs() as f64;
-    let xfi_center = if xfi_center > 180.0 {
-        360.0 - xfi_center
-    } else {
-        xfi_center
+    // Scene-center geometry, as C lasrc.c / init_sr_refl set it for Landsat:
+    // xts is the scene solar zenith from the metadata (float), xmus = cos(xts),
+    // and the view zenith and relative azimuth are both 0.0.
+    let xts_center = match scene_solar_zenith {
+        Some(v) => v as f64,
+        None => solar_zenith[(nlines / 2, nsamps / 2)] as f64,
     };
+    let xmus_center_f32 = (xts_center * DEG2RAD).cos() as f32;
+    let xmus_center = xmus_center_f32 as f64;
+    let xtv_center = 0.0f64;
+    let xmuv_center = (xtv_center * DEG2RAD).cos();
+    let xfi_center = 0.0f64;
     let cosxfi_center = (xfi_center * DEG2RAD).cos();
 
     // Build gas coefficients per band from sensor-specific constants.
@@ -831,8 +835,8 @@ pub fn compute_surface_reflectance(
             let mut result_taero = raot as f32;
             let mut result_teps = eps as f32;
 
-            // corf = raot / xmus_center for !use_orig_aero
-            let corf = raot / xmus_center;
+            // C: corf = raot / xmus_center;  (float / float)
+            let corf = (raot as f32 / xmus_center_f32) as f64;
 
             // === Post-retrieval validation ===
             let mut result_ipflag: u8 = if center_is_fill { 1u8 << IPFLAG_FILL } else { 0 };
@@ -882,7 +886,7 @@ pub fn compute_surface_reflectance(
 
                 result_teps = WATER_EPS as f32;
                 result_taero = water_result.raot as f32;
-                let water_corf = water_result.raot / xmus_center;
+                let water_corf = (water_result.raot as f32 / xmus_center_f32) as f64;
 
                 // Validate: check band 1 reflectance
                 let ros1 = atmcorlamb2_new(

@@ -31,6 +31,19 @@ class AuxFilePaths:
     aux_source: str = "VIIRS"
 
 
+def _espa_solar_zenith(sun_elevation: float) -> float:
+    """Scene solar zenith as C LaSRC sees it via the ESPA XML metadata.
+
+    convert_lpgs_to_espa reads SUN_ELEVATION with sscanf("%f") into a float,
+    stores 90.0 - elevation as a float, writes it to the XML with "%f", and
+    LaSRC reads it back with atof into a float. The aerosol retrieval is
+    sensitive enough to ULP-level changes in this value that the round trip
+    is reproduced exactly.
+    """
+    zenith = np.float32(90.0 - float(np.float32(sun_elevation)))
+    return float(np.float32(float("%f" % zenith)))
+
+
 def process_scene(
     input_path: str | Path,
     aux_files: AuxFilePaths,
@@ -94,6 +107,9 @@ def process_scene(
         vza = np.full((nlines, nsamps), 0.0, dtype=np.float32)
         vaa = np.full((nlines, nsamps), 0.0, dtype=np.float32)
 
+    sun_elevation = scene["metadata"].get("sun_elevation")
+    scene_solar_zenith = None if sun_elevation is None else _espa_solar_zenith(sun_elevation)
+
     # Extract UTM geotransform for per-pixel coordinate conversion
     # transform.c = UL x, transform.f = UL y, transform.a = pixel width, transform.e = pixel height (neg)
     utm_zone = profile.get("utm_zone", profile["crs"].to_epsg() % 100)
@@ -117,6 +133,7 @@ def process_scene(
         pixel_size_y=abs(transform.e),
         utm_zone=utm_zone,
         use_orig_aero=use_orig_aero,
+        scene_solar_zenith=scene_solar_zenith,
     )
 
     for i in range(len(result["sr_bands"])):
