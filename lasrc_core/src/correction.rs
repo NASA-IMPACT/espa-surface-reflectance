@@ -184,6 +184,10 @@ fn pressure_from_elevation(elevation_m: f64) -> f64 {
 
 /// Extract atmospheric parameters (pressure, ozone, water vapor) at a given lat/lon
 /// using bilinear interpolation over the 4 surrounding CMG grid cells.
+///
+/// Not used by the Landsat path, which must match C's nearest-cell scene-center
+/// lookup (`extract_atm_params_scene_center`) to reproduce C outputs.
+#[allow(dead_code)]
 fn extract_atm_params(aux: &AuxiliaryData, lat: f64, lon: f64) -> (f64, f64, f64) {
     let cmg = latlon_to_cmg(lat, lon);
 
@@ -477,7 +481,7 @@ pub fn compute_surface_reflectance(
     let center_samp_geo = (nsamps / 2) as i32;
     let (scene_center_lat, scene_center_lon) =
         utm_to_deg(space_def, center_line_geo, center_samp_geo);
-    let (pressure, uoz, uwv) = extract_atm_params(aux, scene_center_lat, scene_center_lon);
+    let (pressure, uoz, uwv) = extract_atm_params_scene_center(aux, scene_center_lat, scene_center_lon);
 
     // Scene-center geometry (use center pixel angles)
     let center_line = nlines / 2;
