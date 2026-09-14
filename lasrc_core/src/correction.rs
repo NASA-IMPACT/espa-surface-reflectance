@@ -127,6 +127,13 @@ fn latlon_to_cmg(lat: f64, lon: f64) -> CmgPosition {
     }
 }
 
+/// Per-pixel cosine of the solar zenith as C computes it: the angle times
+/// DEG2RAD in double, cos in double, stored as float. TOA/xmus is then a float
+/// division. Aerosol retrieval can sit on residual ties that a few ULPs flip.
+fn cos_zenith_f32(sza_deg: f32) -> f32 {
+    (sza_deg as f64 * DEG2RAD).cos() as f32
+}
+
 /// Search outward in rings (up to `half_aero_window`) around a window center for
 /// the first non-fill pixel, scanning each ring line by line like C's
 /// `find_closest_non_fill`. Returns `(line, samp)`.
@@ -569,11 +576,11 @@ pub fn compute_surface_reflectance(
                 let pix = iline * nsamps + isamp;
                 if is_fill_pixel(qa_flat[pix]) { continue; }
 
-                let xmus = (solar_zenith[(iline, isamp)] as f64 * DEG2RAD).cos();
+                let xmus = cos_zenith_f32(solar_zenith[(iline, isamp)]);
 
                 for iband in 0..nbands {
-                    let raw_toa = toa_bands[iband][(iline, isamp)] as f64;
-                    let rotoa = (raw_toa / xmus).clamp(MIN_VALID_REFL, MAX_VALID_REFL) as f32;
+                    let rotoa = (toa_bands[iband][(iline, isamp)] / xmus)
+                        .clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32);
 
                     let tgo_x_roatm = btgo[iband] as f32 * broatm[iband] as f32;
                     let tgo_x_ttatmg = btgo[iband] as f32 * bttatmg[iband] as f32;
@@ -647,10 +654,10 @@ pub fn compute_surface_reflectance(
 
             // Get TOA reflectance at this pixel for the needed bands,
             // divided by cos(solar zenith) to match C code's TOA normalization.
-            let xmus_pixel = (solar_zenith[(iline, isamp)] as f64 * DEG2RAD).cos();
+            let xmus_pixel = cos_zenith_f32(solar_zenith[(iline, isamp)]);
             let toa_over_cos = |band_idx: usize| -> f64 {
-                let raw_toa = toa_bands[band_idx][(iline, isamp)] as f64;
-                (raw_toa / xmus_pixel).clamp(MIN_VALID_REFL, MAX_VALID_REFL)
+                (toa_bands[band_idx][(iline, isamp)] / xmus_pixel)
+                    .clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32) as f64
             };
 
             // C: img.l = i - 0.5; img.s = j + 0.5; from_space(space, &img, &geo);
@@ -969,9 +976,9 @@ pub fn compute_surface_reflectance(
                         // Cirrus band: not atmospherically corrected, just
                         // TOA reflectance normalized by cos(SZA). Matches
                         // C's SRL_BAND9 handling in lasrc.c.
-                        let xmus = (solar_zenith[(iline, isamp)] as f64 * DEG2RAD).cos();
-                        (toa_bands[iband][(iline, isamp)] as f64 / xmus)
-                            .clamp(MIN_VALID_REFL, MAX_VALID_REFL)
+                        let xmus = cos_zenith_f32(solar_zenith[(iline, isamp)]);
+                        (toa_bands[iband][(iline, isamp)] / xmus)
+                            .clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32) as f64
                     } else {
                         // Reconstruct TOA from climatological SR
                         let rsurf = sband[iband][pix]; // f32
