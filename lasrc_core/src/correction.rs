@@ -127,6 +127,36 @@ fn latlon_to_cmg(lat: f64, lon: f64) -> CmgPosition {
     }
 }
 
+/// Search outward in rings (up to `half_aero_window`) around a window center for
+/// the first non-fill pixel, scanning each ring line by line like C's
+/// `find_closest_non_fill`. Returns `(line, samp)`.
+fn find_closest_non_fill(
+    qa: &[u16],
+    nlines: usize,
+    nsamps: usize,
+    center_line: usize,
+    center_samp: usize,
+    half_aero_window: usize,
+) -> Option<(usize, usize)> {
+    let (cl, cs) = (center_line as isize, center_samp as isize);
+    for w in 1..=half_aero_window as isize {
+        for line in (cl - w)..=(cl + w) {
+            if line < 0 || line >= nlines as isize {
+                continue;
+            }
+            for samp in (cs - w)..=(cs + w) {
+                if samp < 0 || samp >= nsamps as isize {
+                    continue;
+                }
+                if !is_fill_pixel(qa[line as usize * nsamps + samp as usize]) {
+                    return Some((line as usize, samp as usize));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Bilinear interpolation over 4 values with the given weights.
 fn bilerp(vals: [f64; 4], w: &[f64; 4]) -> f64 {
     vals[0] * w[0] + vals[1] * w[1] + vals[2] * w[2] + vals[3] * w[3]
@@ -590,15 +620,26 @@ pub fn compute_surface_reflectance(
         window_centers.par_iter().map(|&(iline, isamp)| {
             let pix = iline * nsamps + isamp;
 
-            // Skip fill pixels
-            if is_fill_pixel(qa_flat[pix]) {
-                return AerosolWindowResult {
-                    pix,
-                    taero: 0.0,
-                    teps: 0.0,
-                    ipflag: 1u8 << IPFLAG_FILL,
-                };
-            }
+            // A fill window center is retrieved at the closest non-fill pixel in
+            // the window, but results are still stored at the center. Its FILL
+            // bit is kept unless the water retest overwrites the flags.
+            let center_is_fill = is_fill_pixel(qa_flat[pix]);
+            let (iline, isamp) = if center_is_fill {
+                match find_closest_non_fill(&qa_flat, nlines, nsamps, iline, isamp, half_aero_window) {
+                    Some(loc) => loc,
+                    None => {
+                        return AerosolWindowResult {
+                            pix,
+                            taero: 0.0,
+                            teps: 0.0,
+                            ipflag: 1u8 << IPFLAG_FILL,
+                        };
+                    }
+                }
+            } else {
+                (iline, isamp)
+            };
+            let spix = iline * nsamps + isamp;
 
             // Get TOA reflectance at this pixel for the needed bands,
             // divided by cos(solar zenith) to match C code's TOA normalization.
@@ -683,8 +724,8 @@ pub fn compute_surface_reflectance(
             let intrb7 = bilerp(int_b7, &cmg.w);
 
             // Compute NDWI from climatological SR bands 5 (NIR) and 7 (SWIR2)
-            let sr_nir = sband[bi.nir][pix] as f64;
-            let sr_swir2 = sband[bi.swir2][pix] as f64;
+            let sr_nir = sband[bi.nir][spix] as f64;
+            let sr_swir2 = sband[bi.swir2][spix] as f64;
             let sr_swir2_half = sr_swir2 * 0.5;
             let denom = sr_nir + sr_swir2_half;
             let mut xndwi = if denom.abs() > 1.0e-10 {
@@ -782,7 +823,7 @@ pub fn compute_surface_reflectance(
             let corf = raot / xmus_center;
 
             // === Post-retrieval validation ===
-            let mut result_ipflag: u8 = 0;
+            let mut result_ipflag: u8 = if center_is_fill { 1u8 << IPFLAG_FILL } else { 0 };
             if residual < (0.015 + 0.005 * corf + 0.10 * troatm[bi.swir2]) {
                 // Check NIR (band 5) and red (band 4) to compute NDVI
                 let ros5 = atmcorlamb2_new(
