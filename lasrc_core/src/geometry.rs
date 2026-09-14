@@ -91,10 +91,11 @@ pub fn scattering_angle(xmus: f64, xmuv: f64, cosxfi: f64) -> f64 {
     let xmus_f = xmus as f32;
     let xmuv_f = xmuv as f32;
     let cosxfi_f = cosxfi as f32;
-    let cscaa: f32 = (-(xmus_f as f64) * xmuv_f as f64
+    // -xmus * xmuv and xmus * xmus are float products; the rest is double.
+    let cscaa: f32 = ((-xmus_f * xmuv_f) as f64
         - cosxfi_f as f64
-            * (1.0 - xmus_f as f64 * xmus_f as f64).sqrt()
-            * (1.0 - xmuv_f as f64 * xmuv_f as f64).sqrt()) as f32;
+            * (1.0 - (xmus_f * xmus_f) as f64).sqrt()
+            * (1.0 - (xmuv_f * xmuv_f) as f64).sqrt()) as f32;
     let cscaa = cscaa.clamp(-1.0, 1.0);
     let scaa: f32 = ((cscaa as f64).acos() * RAD2DEG) as f32;
     scaa as f64

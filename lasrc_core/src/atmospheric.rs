@@ -162,8 +162,13 @@ pub fn atmcorlamb2(
     // C uses float (f32) throughout atmcorlamb2. Truncate all intermediate
     // values to f32 after calling f64 helper functions to match C precision.
 
+    // C: all angle, pressure and gas amount inputs are float
+    let (xts, xtv, xmus, xmuv, xfi) = (xts as f32, xtv as f32, xmus as f32, xmuv as f32, xfi as f32);
+    let (pres, uoz, uwv) = (pressure as f32, uoz as f32, uwv as f32);
+
     // Modify AOT based on Angstrom coefficient and wavelength.
-    let lambda_sf: f32 = 1.0f32 / 0.55f32;
+    // C (atmcorlamb2, unlike atmcorlamb2_new): static const double lambda_sf = 1/0.55;
+    let lambda_sf: f64 = 1.0 / 0.55;
     let mraot550nm: f32 = if eps < 0.0 || iband > max_band_idx {
         raot550nm as f32
     } else {
@@ -173,40 +178,46 @@ pub fn atmcorlamb2(
         } else {
             1.0f32
         };
-        // C: pow() uses double precision for the exponentiation
-        let base = (lambda[iband] as f32 * lambda_sf) as f64;
-        let power = base.powf(-(eps as f64));
+        // C: mraot550nm = (raot550nm / normext[indx]) * (pow((lambda[iband] * lambda_sf), -eps));
+        // float / float, then * double pow(float * double, -float)
+        let base = lambda[iband] as f32 as f64 * lambda_sf;
+        let power = base.powf(-(eps as f32) as f64);
         ((raot550nm as f32 / normext_val) as f64 * power) as f32
     };
 
-    // Normalised atmospheric pressure
-    let atm_pres: f32 = (pressure * ONE_DIV_ATMOS_PRES_0) as f32;
+    // C: atm_pres = pres * ONE_DIV_ATMOS_PRES_0;  (float * double literal)
+    let atm_pres: f32 = (pres as f64 * ONE_DIV_ATMOS_PRES_0) as f32;
 
     // Rayleigh optical depth scaled to surface pressure
     let xtaur: f32 = (tauray_band as f32) * atm_pres;
 
-    // Rayleigh scattering reflectance (computed in f64, truncated to f32)
-    let xrorayp: f32 = rayleigh_reflectance(xfi, xmuv, xmus, xtaur as f64) as f32;
+    let xrorayp: f32 =
+        rayleigh_reflectance(xfi as f64, xmuv as f64, xmus as f64, xtaur as f64) as f32;
 
     // Find pressure and AOT indices into the LUT using modified AOT
-    let indices: LutIndices = lut.find_indices(pressure, mraot550nm as f64);
+    let indices: LutIndices = lut.find_indices(pres as f64, mraot550nm as f64);
 
-    // Interpolate atmospheric quantities from LUT, truncated to f32
-    let satm: f32 = lut.interp_spherical_albedo(&indices, iband, pressure, mraot550nm as f64) as f32;
+    let satm: f32 = lut.interp_spherical_albedo(&indices, iband, pres as f64, mraot550nm as f64) as f32;
     let roatm_raw: f32 = lut.interp_atmospheric_reflectance(
-        &indices, iband, pressure, mraot550nm as f64, xts, xtv, xmus, xmuv, cosxfi,
+        &indices, iband, pres as f64, mraot550nm as f64, xts as f64, xtv as f64,
+        xmus as f64, xmuv as f64, cosxfi,
     ) as f32;
 
-    // Downward and upward transmittances, then total atmospheric transmittance
-    let xtts: f32 = lut.interp_transmission(&indices, iband, pressure, mraot550nm as f64, xts) as f32;
-    let xttv: f32 = lut.interp_transmission(&indices, iband, pressure, mraot550nm as f64, xtv) as f32;
+    // Downward and upward transmittances. C calls comptrans with the solar
+    // (xtsmin, xtsstep) grid for xts but the view (xtvmin, xtvstep) grid for xtv,
+    // while indexing the same tts table.
+    let xtts: f32 = lut.interp_transmission(
+        &indices, iband, pres as f64, mraot550nm as f64, xts as f64, XTS_MIN as f32, XTS_STEP as f32,
+    ) as f32;
+    let xttv: f32 = lut.interp_transmission(
+        &indices, iband, pres as f64, mraot550nm as f64, xtv as f64, XTV_MIN as f32, XTV_STEP_C,
+    ) as f32;
     let ttatm: f32 = xtts * xttv;
 
-    // Gas transmissions (computed in f64, truncated to f32)
-    let gt = compute_gas_transmission(gas_coeff, xmus, xmuv, uoz, uwv, atm_pres as f64);
-    let tgo: f32 = gt.tgo as f32;
-    let tgwv: f32 = gt.tgwv as f32;
-    let tgwvhalf: f32 = gt.tgwvhalf as f32;
+    let gt = compute_gas_transmission(gas_coeff, xmus, xmuv, uoz, uwv, atm_pres);
+    let tgo: f32 = gt.tgo;
+    let tgwv: f32 = gt.tgwv;
+    let tgwvhalf: f32 = gt.tgwvhalf;
 
     // Apply water-vapour half-path correction to atmospheric reflectance
     let roatm_corrected: f32 = (roatm_raw - xrorayp) * tgwvhalf + xrorayp;

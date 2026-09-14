@@ -1,3 +1,5 @@
+use crate::constants::DEG2RAD;
+
 /// Compute Rayleigh scattering reflectance using the depolarization factor
 /// and a 10-coefficient Legendre polynomial approximation.
 ///
@@ -22,25 +24,31 @@ pub fn rayleigh_reflectance(xphi: f64, xmuv: f64, xmus: f64, xtau: f64) -> f64 {
     let xmus2: f32 = xmus * xmus;
     let xmuv2: f32 = xmuv * xmuv;
 
-    // Phase function components
-    let xph1: f32 = 1.0 + (3.0 * xmus2 - 1.0) * (3.0 * xmuv2 - 1.0) * xfd * 0.125;
-    let xph3_base: f32 = (1.0 - xmus2) * (1.0 - xmuv2);
-    // C: xph2 = -xmus * xmuv * sqrt(xph3); — sqrt is double
-    let xph2: f32 = -xmus * xmuv * (xph3_base as f64).sqrt() as f32;
-    let xph2: f32 = xph2 * xfd * 0.75;
-    let xph3: f32 = xph3_base * xfd * 0.1875;
+    // Phase function components. C literals 1.0, 3.0, 0.125, 0.75, 0.1875 are
+    // double, so these expressions are evaluated in double and stored as float.
+    // C: xph1 = 1.0 + (3.0*xmus2 - 1.0) * (3.0*xmuv2 - 1.0) * xfd * 0.125;
+    let xph1: f32 = (1.0
+        + (3.0 * xmus2 as f64 - 1.0) * (3.0 * xmuv2 as f64 - 1.0) * xfd as f64 * 0.125)
+        as f32;
+    // C: xph3 = (1.0 - xmus2) * (1.0 - xmuv2);
+    let xph3_base: f32 = ((1.0 - xmus2 as f64) * (1.0 - xmuv2 as f64)) as f32;
+    // C: xph2 = -xmus * xmuv * sqrt(xph3); (float*float, then * double sqrt)
+    let xph2: f32 = ((-xmus * xmuv) as f64 * (xph3_base as f64).sqrt()) as f32;
+    // C: xph2 = xph2 * xfd * 0.75; (float*float, then * double)
+    let xph2: f32 = ((xph2 * xfd) as f64 * 0.75) as f32;
+    // C: xph3 = xph3 * xfd * 0.1875;
+    let xph3: f32 = ((xph3_base * xfd) as f64 * 0.1875) as f32;
 
-    // C: phios = xphi * DEG2RAD; (float)
+    // C: phios = xphi * DEG2RAD; (DEG2RAD is a double literal, phios is float)
     // C: xcosf2 = -cos(phios); xcosf3 = cos(2.0 * phios); — cos is double
-    let deg2rad: f32 = std::f32::consts::PI / 180.0;
-    let phios: f32 = xphi * deg2rad;
+    let phios: f32 = (xphi as f64 * DEG2RAD) as f32;
     let xcosf2: f32 = -(phios as f64).cos() as f32;
     let xcosf3: f32 = (2.0f64 * phios as f64).cos() as f32;
 
     // C: xitm = (1.0 - exp(-xtau * (1.0/xmus + 1.0/xmuv))) / (4*(xmus+xmuv));
-    // Note: 1.0 is double, exp is double, result stored as float
+    // Note: 1.0 is double, exp is double, 4*(xmus+xmuv) is float, result stored as float
     let xitm_ss: f32 = ((1.0 - (-(xtau as f64) * (1.0 / xmus as f64 + 1.0 / xmuv as f64)).exp())
-        / (4.0 * (xmus as f64 + xmuv as f64))) as f32;
+        / (4.0f32 * (xmus + xmuv)) as f64) as f32;
     let xp1: f32 = xph1 * xitm_ss;
     let xp2: f32 = xph2 * xitm_ss;
     let xp3: f32 = xph3 * xitm_ss;
@@ -69,11 +77,11 @@ pub fn rayleigh_reflectance(xphi: f64, xmuv: f64, xmus: f64, xtau: f64) -> f64 {
         xmus + xmuv,
         xlntau * (xmus + xmuv),
         xmus * xmuv,
-        xlntau * xmus * xmuv,
+        xlntau * (xmus * xmuv),
         xmus2 + xmuv2,
         xlntau * (xmus2 + xmuv2),
         xmus2 * xmuv2,
-        xlntau * xmus2 * xmuv2,
+        xlntau * (xmus2 * xmuv2),
     ];
 
     let mut fs0: f32 = 0.0;
