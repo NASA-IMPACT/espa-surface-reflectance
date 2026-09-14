@@ -204,9 +204,31 @@ pub fn subaeroret_new(
         };
 
         // Evaluate residual at the parabolic minimum
-        // C: raot550nm = raotmin (double→float truncation)
-        let (residualm_f32, _ros1, _testth) = compute_residual(raotmin as f32);
-        let mut residualm: f64 = residualm_f32 as f64;
+        // C: raot550nm = raotmin (double->float truncation). Unlike the search
+        // loop, C accumulates `double residualm` here and never rounds it to
+        // float before the comparisons below; for water the reference band is
+        // added before the other bands.
+        let raot_m = raotmin as f32;
+        let ros1_m: f64 = atm_corr(iband1, raot_m) as f64;
+        let mut residualm: f64 = 0.0;
+        let mut nbval_m = 0usize;
+        if is_water && erelc[iband1] > 0.0 {
+            residualm += (ros1_m as f32 * ros1_m as f32) as f64;
+            nbval_m += 1;
+        }
+        for ib in 0..nband {
+            if ib != iband1 && erelc[ib] > 0.0 {
+                let roslamb = atm_corr(ib, raot_m);
+                if is_water {
+                    residualm += (roslamb * roslamb) as f64;
+                } else {
+                    let point_error: f64 = roslamb as f64 - (erelc[ib] as f32 as f64) * ros1_m;
+                    residualm += point_error * point_error;
+                }
+                nbval_m += 1;
+            }
+        }
+        residualm = residualm.sqrt() / nbval_m as f64;
         // C: *raot = raot550nm (which is raotmin truncated to float)
         final_raot = raotmin as f32;
 
@@ -224,7 +246,8 @@ pub fn subaeroret_new(
             residualm = residual2;
             final_raot = raot2 as f32; // C: *raot = raot2 (double→float)
         }
-        final_residual = residualm;
+        // C: *residual is float
+        final_residual = residualm as f32 as f64;
 
         // C: *iaots = MAX((iaot2 - 3), 0)
         // Special case for water: if iaot == 1, iaots = 0
