@@ -164,6 +164,9 @@ pub const XTS_MIN: f64 = 0.0;
 pub const XTS_STEP: f64 = 4.0;
 pub const XTV_MIN: f64 = 2.84090;
 pub const XTV_STEP: f64 = 3.68017;
+/// View zenith step as C stores it: `float xtvmin = 2.84090; xtvstep = 6.52107 - xtvmin;`
+/// (double literal minus float, stored as float).
+pub const XTV_STEP_C: f32 = (6.52107f64 - XTV_MIN as f32 as f64) as f32;
 
 // QA flag bit positions
 pub const IPFLAG_FILL: u8 = 0;
