@@ -20,6 +20,11 @@ pub struct SpaceDef {
 ///
 /// Algorithm ported directly from `utmtodeg.c` using WGS84 ellipsoid parameters.
 pub fn utm_to_deg(space_def: &SpaceDef, line: i32, samp: i32) -> (f64, f64) {
+    utm_to_deg_f(space_def, line as f64, samp as f64)
+}
+
+/// Like [`utm_to_deg`] but for fractional image coordinates.
+pub fn utm_to_deg_f(space_def: &SpaceDef, line: f64, samp: f64) -> (f64, f64) {
     // WGS84 ellipsoid constants
     let sa: f64 = 6378137.0;
     let inv_flattening: f64 = 298.257223563;
@@ -34,8 +39,8 @@ pub fn utm_to_deg(space_def: &SpaceDef, line: i32, samp: i32) -> (f64, f64) {
     let c = (sa * sa) / sb;
 
     // Projection coordinates for the given line/sample
-    let mut x = space_def.ul_corner_x + (samp as f64 * space_def.pixel_size[0]);
-    let mut y = space_def.ul_corner_y - (line as f64 * space_def.pixel_size[1]);
+    let mut x = space_def.ul_corner_x + (samp * space_def.pixel_size[0]);
+    let mut y = space_def.ul_corner_y - (line * space_def.pixel_size[1]);
 
     x -= false_easting;
     if space_def.zone < 0 {
