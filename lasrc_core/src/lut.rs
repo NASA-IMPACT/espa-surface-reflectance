@@ -211,14 +211,13 @@ impl LookupTables {
                     isca = 1;
                 }
 
-                // C: sca1 = xtsmax[i] - (isca - 1) * 4.0;  (int * double, stored as float)
                 let (sca1, sca2, isca_used) = if isca + 1 < nbfi_i as usize {
-                    let s1 = (xtsmax_i as f64 - (isca as f64 - 1.0) * 4.0) as f32;
+                    let s1 = xtsmax_i - (isca as f32 - 1.0f32) * 4.0f32;
                     let s2 = s1 - 4.0f32;
                     (s1, s2, isca)
                 } else {
                     let isca_c = (nbfi_i as usize).saturating_sub(1);
-                    let s1 = (xtsmax_i as f64 - (isca_c as f64 - 1.0) * 4.0) as f32;
+                    let s1 = xtsmax_i - (isca_c as f32 - 1.0f32) * 4.0f32;
                     let s2 = xtsmin_i;
                     (s1, s2, isca_c)
                 };
