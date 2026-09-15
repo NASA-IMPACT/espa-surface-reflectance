@@ -956,10 +956,17 @@ pub fn compute_surface_reflectance(
 
     // ── Step 7: Final per-pixel atmospheric correction ──
     // For each pixel, reconstruct TOA from climatological SR, then apply
-    // atmcorlamb2_new with per-pixel retrieved aerosol.
+    // atmcorlamb2_new with per-pixel retrieved aerosol, and scale straight to
+    // the output integers so no full-scene floating point copy of the SR bands
+    // is kept.
     // C code: rotoa = (rsurf * bttatmg[ib] / (1 - bsatm[ib] * rsurf) + broatm[ib]) * btgo[ib]
-    let sr_flat: Vec<Vec<f64>> = (0..nbands)
-        .map(|_| vec![0.0f64; npix])
+    // C uses float (f32) arithmetic for output scaling:
+    //   float tmpf = (sband[band][pix] + offset_value) * mult_value;
+    //   out_band[pix] = roundf(tmpf);
+    let offset_f32 = BAND_OFFSET_REFL as f32;
+    let mult_f32 = MULT_FACTOR_REFL as f32;
+    let sr_out: Vec<Vec<u16>> = (0..nbands)
+        .map(|_| vec![SR_FILL_VALUE; npix])
         .collect();
 
     pool.install(|| {
@@ -1004,62 +1011,46 @@ pub fn compute_surface_reflectance(
                         .clamp(MIN_VALID_REFL, MAX_VALID_REFL)
                     };
 
+                    let tmpf = (roslamb as f32 + offset_f32) * mult_f32;
+                    let scaled = tmpf.round().clamp(0.0, u16::MAX as f32) as u16;
+
                     // SAFETY: Each iline is processed by exactly one thread
                     // (Rayon's into_par_iter guarantees this). Within a thread,
                     // pix = iline * nsamps + isamp produces unique indices for
                     // that row, so no two threads write to the same index.
                     unsafe {
-                        let ptr = sr_flat[iband].as_ptr() as *mut f64;
-                        *ptr.add(pix) = roslamb;
+                        let ptr = sr_out[iband].as_ptr() as *mut u16;
+                        *ptr.add(pix) = scaled;
+                    }
+
+                    // Aerosol QA bits from the coastal aerosol band, using
+                    // |rsurf - roslamb| as the aerosol level indicator.
+                    // Matches C code compute_landsat_refl.c lines 1758-1780.
+                    if iband == bi.coastal {
+                        let rsurf = sband[bi.coastal][pix] as f64;
+                        let tmpf = (rsurf - roslamb).abs();
+                        let bits = if tmpf <= LOW_AERO_THRESH {
+                            1u8 << AERO1_QA
+                        } else if tmpf < AVG_AERO_THRESH {
+                            1u8 << AERO2_QA
+                        } else {
+                            (1u8 << AERO1_QA) | (1u8 << AERO2_QA)
+                        };
+                        // SAFETY: same unique-index argument as above.
+                        unsafe {
+                            let ptr = ipflag.as_ptr() as *mut u8;
+                            *ptr.add(pix) |= bits;
+                        }
                     }
                 }
             }
         });
     });
 
-    // Serial post-pass: set aerosol QA bits on the coastal aerosol band
-    // using |rsurf - roslamb| as the aerosol level indicator.
-    // Matches C code compute_landsat_refl.c lines 1758-1780.
-    for iline in 0..nlines {
-        for isamp in 0..nsamps {
-            let pix = iline * nsamps + isamp;
-            if is_fill_pixel(qa_flat[pix]) {
-                continue;
-            }
-
-            let rsurf = sband[bi.coastal][pix] as f64;
-            let roslamb = sr_flat[bi.coastal][pix];
-            let tmpf = (rsurf - roslamb).abs();
-            if tmpf <= LOW_AERO_THRESH {
-                ipflag[pix] |= 1u8 << AERO1_QA;
-            } else if tmpf < AVG_AERO_THRESH {
-                ipflag[pix] |= 1u8 << AERO2_QA;
-            } else {
-                ipflag[pix] |= (1u8 << AERO1_QA) | (1u8 << AERO2_QA);
-            }
-        }
-    }
-
-    // ── Step 8: Scale to output integers ──
-    // C uses float (f32) arithmetic for output scaling:
-    //   float tmpf = (sband[band][pix] + offset_value) * mult_value;
-    //   out_band[pix] = roundf(tmpf);
-    let offset_f32 = BAND_OFFSET_REFL as f32;
-    let mult_f32 = MULT_FACTOR_REFL as f32;
-    let sr_bands: Vec<Array2<u16>> = sr_flat
-        .iter()
-        .map(|band| {
-            Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
-                let pix = i * nsamps + j;
-                if is_fill_pixel(qa_flat[pix]) {
-                    SR_FILL_VALUE
-                } else {
-                    let sband_f32 = band[pix] as f32;
-                    let tmpf = (sband_f32 + offset_f32) * mult_f32;
-                    tmpf.round().clamp(0.0, u16::MAX as f32) as u16
-                }
-            })
-        })
+    // Step 8: Wrap output integers
+    let sr_bands: Vec<Array2<u16>> = sr_out
+        .into_iter()
+        .map(|band| Array2::from_shape_vec((nlines, nsamps), band).expect("band size matches scene"))
         .collect();
 
     // Scale brightness temperature bands
