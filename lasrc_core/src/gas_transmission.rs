@@ -62,7 +62,7 @@ pub fn compute_gas_transmission(
     };
 
     // C: x *= 0.5; *tgwvhalf = exp(-a * pow(x, b));
-    let xhalf: f32 = (x as f64 * 0.5) as f32;
+    let xhalf: f32 = x * 0.5f32;
     let tgwvhalf = if xhalf as f64 > 1e-06 {
         (-(a as f64) * (xhalf as f64).powf(b as f64)).exp() as f32
     } else {

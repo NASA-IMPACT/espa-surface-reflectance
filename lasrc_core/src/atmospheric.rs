@@ -181,7 +181,7 @@ pub fn atmcorlamb2(
         // C: mraot550nm = (raot550nm / normext[indx]) * (pow((lambda[iband] * lambda_sf), -eps));
         // float / float, then * double pow(float * double, -float)
         let base = lambda[iband] as f32 as f64 * lambda_sf;
-        let power = base.powf(-(eps as f32) as f64);
+        let power = base.powf(-eps);
         ((raot550nm as f32 / normext_val) as f64 * power) as f32
     };
 

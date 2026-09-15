@@ -24,8 +24,8 @@ pub fn rayleigh_reflectance(xphi: f64, xmuv: f64, xmus: f64, xtau: f64) -> f64 {
     let xmus2: f32 = xmus * xmus;
     let xmuv2: f32 = xmuv * xmuv;
 
-    // Phase function components. C literals 1.0, 3.0, 0.125, 0.75, 0.1875 are
-    // double, so these expressions are evaluated in double and stored as float.
+    // Phase function components. C literals 1.0, 3.0 and 0.125 are double, so
+    // these expressions are evaluated in double and stored as float.
     // C: xph1 = 1.0 + (3.0*xmus2 - 1.0) * (3.0*xmuv2 - 1.0) * xfd * 0.125;
     let xph1: f32 = (1.0
         + (3.0 * xmus2 as f64 - 1.0) * (3.0 * xmuv2 as f64 - 1.0) * xfd as f64 * 0.125)
@@ -34,10 +34,8 @@ pub fn rayleigh_reflectance(xphi: f64, xmuv: f64, xmus: f64, xtau: f64) -> f64 {
     let xph3_base: f32 = ((1.0 - xmus2 as f64) * (1.0 - xmuv2 as f64)) as f32;
     // C: xph2 = -xmus * xmuv * sqrt(xph3); (float*float, then * double sqrt)
     let xph2: f32 = ((-xmus * xmuv) as f64 * (xph3_base as f64).sqrt()) as f32;
-    // C: xph2 = xph2 * xfd * 0.75; (float*float, then * double)
-    let xph2: f32 = ((xph2 * xfd) as f64 * 0.75) as f32;
-    // C: xph3 = xph3 * xfd * 0.1875;
-    let xph3: f32 = ((xph3_base * xfd) as f64 * 0.1875) as f32;
+    let xph2: f32 = xph2 * xfd * 0.75;
+    let xph3: f32 = xph3_base * xfd * 0.1875;
 
     // C: phios = xphi * DEG2RAD; (DEG2RAD is a double literal, phios is float)
     // C: xcosf2 = -cos(phios); xcosf3 = cos(2.0 * phios); — cos is double
