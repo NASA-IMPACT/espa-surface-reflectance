@@ -36,15 +36,15 @@ def load_angle_lut(path: str) -> dict:
     result = {}
     for name in ["TSMAX", "TSMIN", "NBFIC", "TTV", "TTS"]:
         result[name.lower()] = (
-            hdf.select(name).get().astype(np.float64).ravel().tolist()
+            hdf.select(name).get().astype(np.float64).ravel()
         )
-    result["nbfi"] = hdf.select("NBFI").get().astype(np.int32).ravel().tolist()
-    result["indts"] = hdf.select("INDTS").get().astype(np.int32).ravel().tolist()
+    result["nbfi"] = hdf.select("NBFI").get().astype(np.int32).ravel()
+    result["indts"] = hdf.select("INDTS").get().astype(np.int32).ravel()
     hdf.end()
     return result
 
 
-def load_rolutt(path: str, band_names: list[str]) -> list:
+def load_rolutt(path: str, band_names: list[str]) -> np.ndarray:
     """Load the intrinsic reflectance LUT (RES_LUT_*.hdf) from HDF4.
 
     HDF4 stores one dataset per band (named in ``band_names``), each shaped
@@ -67,14 +67,14 @@ def load_rolutt(path: str, band_names: list[str]) -> list:
                 rolutt[base:base + NSOLAR] = data[:, ia, ip]
 
     hdf.end()
-    return rolutt.tolist()
+    return rolutt
 
 
-def load_aero_ascii(path: str, nsr_bands: int) -> tuple[list, list]:
+def load_aero_ascii(path: str, nsr_bands: int) -> tuple[np.ndarray, np.ndarray]:
     """Load spherical albedo and normalized extinction from the AERO ASCII file.
 
     Format: per band, NPRES pressure blocks, NAOT lines per block
-    (aot sphalbt normext). Returns (sphalbt, normext) flat lists in
+    (aot sphalbt normext). Returns (sphalbt, normext) flat arrays in
     band x NPRES x NAOT layout.
     """
     sphalbt = np.zeros(nsr_bands * NPRES * NAOT, dtype=np.float64)
@@ -95,16 +95,16 @@ def load_aero_ascii(path: str, nsr_bands: int) -> tuple[list, list]:
                 normext[base] = float(parts[2])
                 idx += 1
 
-    return sphalbt.tolist(), normext.tolist()
+    return sphalbt, normext
 
 
-def load_trans_ascii(path: str, nsr_bands: int) -> list:
+def load_trans_ascii(path: str, nsr_bands: int) -> np.ndarray:
     """Load the transmission LUT from the TRANS ASCII file.
 
     Format: per band, NPRES pressure blocks, NSUNANGLE_FILE sun-angle lines per
     block, each line a sun angle followed by NAOT transmission values. The Rust
     core allocates NSUNANGLE slots per (band, pressure, aot) but only the first
-    NSUNANGLE_FILE are populated from the file. Returns a flat list in
+    NSUNANGLE_FILE are populated from the file. Returns a flat array in
     band x NPRES x NAOT x NSUNANGLE layout.
     """
     transt = np.zeros(nsr_bands * NPRES * NAOT * NSUNANGLE, dtype=np.float64)
@@ -128,7 +128,7 @@ def load_trans_ascii(path: str, nsr_bands: int) -> list:
                     transt[base] = float(parts[1 + ia])
                 idx += 1
 
-    return transt.tolist()
+    return transt
 
 
 def load_lut(angle_path: str, intref_path: str, transm_path: str,
@@ -189,8 +189,8 @@ def _load_viirs_aux(aux_path: str) -> dict:
         oz = np.array(f[base + "Coarse Resolution Ozone"], dtype=np.int16).ravel()
 
     return {
-        "wv": wv.tolist(),
-        "oz": oz.tolist(),
+        "wv": wv,
+        "oz": oz,
         "wv_scale": 200.0,
         "oz_scale": 400.0,
         "wv_default": 2.5,
@@ -203,14 +203,14 @@ def _load_modis_aux(aux_path: str) -> dict:
     raise NotImplementedError("MODIS auxiliary loading not yet implemented")
 
 
-def load_dem(dem_path: str) -> list:
+def load_dem(dem_path: str) -> np.ndarray:
     """Load the CMG DEM ('averaged elevation') from HDF4."""
     from pyhdf.SD import SD, SDC
 
     hdf = SD(str(dem_path), SDC.READ)
     dem = hdf.select("averaged elevation").get().astype(np.int16).ravel()
     hdf.end()
-    return dem.tolist()
+    return dem
 
 
 def load_ratio_file(ratio_path: str) -> dict:
@@ -241,6 +241,6 @@ def load_ratio_file(ratio_path: str) -> dict:
     for field_name, dataset_name in name_map.items():
         result[field_name] = np.array(
             hdf.select(dataset_name).get(), dtype=np.int16
-        ).ravel().tolist()
+        ).ravel()
     hdf.end()
     return result
