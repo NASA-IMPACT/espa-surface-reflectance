@@ -732,12 +732,13 @@ pub fn compute_surface_reflectance(
             }
 
             // Bilinearly interpolate slopes and intercepts
-            let slprb1 = bilerp(slp_b1, &cmg.w);
-            let intrb1 = bilerp(int_b1, &cmg.w);
-            let slprb2 = bilerp(slp_b2, &cmg.w);
-            let intrb2 = bilerp(int_b2, &cmg.w);
-            let slprb7 = bilerp(slp_b7, &cmg.w);
-            let intrb7 = bilerp(int_b7, &cmg.w);
+            // C: slpr/intr and the CMG weights are float, so this is float arithmetic
+            let slprb1 = bilerp_f32(slp_b1, &cmg.w) as f64;
+            let intrb1 = bilerp_f32(int_b1, &cmg.w) as f64;
+            let slprb2 = bilerp_f32(slp_b2, &cmg.w) as f64;
+            let intrb2 = bilerp_f32(int_b2, &cmg.w) as f64;
+            let slprb7 = bilerp_f32(slp_b7, &cmg.w) as f64;
+            let intrb7 = bilerp_f32(int_b7, &cmg.w) as f64;
 
             // Compute NDWI from climatological SR bands 5 (NIR) and 7 (SWIR2)
             let sr_nir = sband[bi.nir][spix] as f64;
