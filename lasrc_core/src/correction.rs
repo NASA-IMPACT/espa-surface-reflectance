@@ -14,7 +14,7 @@ use crate::aerosol::{
 use crate::atmospheric::{atmcorlamb2, atmcorlamb2_new, AtmCorrCoefficients};
 use crate::constants::*;
 use crate::gas_transmission::GasCoefficients;
-use crate::geometry::{utm_to_deg, utm_to_deg_f, SpaceDef};
+use crate::geometry::{utm_to_deg, utm_to_deg_gctp, SpaceDef};
 use crate::lut::LookupTables;
 use crate::sensor::Sensor;
 use crate::utils::get_3rd_order_poly_coeff;
@@ -666,7 +666,7 @@ pub fn compute_surface_reflectance(
 
             // C: img.l = i - 0.5; img.s = j + 0.5; from_space(space, &img, &geo);
             let (pixel_lat, pixel_lon) =
-                utm_to_deg_f(space_def, iline as f64 - 0.5, isamp as f64 + 0.5);
+                utm_to_deg_gctp(space_def, iline as f64 - 0.5, isamp as f64 + 0.5);
 
             // Look up CMG position for slope/intercept computation
             let cmg = latlon_to_cmg(pixel_lat, pixel_lon);
