@@ -1,4 +1,4 @@
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -18,19 +18,23 @@ impl PyLookupTables {
     #[new]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        rolutt: Vec<f64>,
-        transt: Vec<f64>,
-        sphalbt: Vec<f64>,
-        normext: Vec<f64>,
-        tsmax: Vec<f64>,
-        tsmin: Vec<f64>,
-        nbfic: Vec<f64>,
-        nbfi: Vec<i32>,
-        ttv: Vec<f64>,
-        tts: Vec<f64>,
-        indts: Vec<i32>,
+        rolutt: PyReadonlyArray1<'_, f64>,
+        transt: PyReadonlyArray1<'_, f64>,
+        sphalbt: PyReadonlyArray1<'_, f64>,
+        normext: PyReadonlyArray1<'_, f64>,
+        tsmax: PyReadonlyArray1<'_, f64>,
+        tsmin: PyReadonlyArray1<'_, f64>,
+        nbfic: PyReadonlyArray1<'_, f64>,
+        nbfi: PyReadonlyArray1<'_, i32>,
+        ttv: PyReadonlyArray1<'_, f64>,
+        tts: PyReadonlyArray1<'_, f64>,
+        indts: PyReadonlyArray1<'_, i32>,
         nsr_bands: usize,
     ) -> PyResult<Self> {
+        let to_f32 = |a: &PyReadonlyArray1<'_, f64>| -> Vec<f32> {
+            a.as_array().iter().map(|&v| v as f32).collect()
+        };
+        let tts = tts.as_array();
         if tts.len() != NSOLAR_ZEN_VALS {
             return Err(PyValueError::new_err(format!(
                 "tts must have {} elements, got {}",
@@ -44,17 +48,17 @@ impl PyLookupTables {
         }
         Ok(Self {
             inner: LookupTables {
-                rolutt: rolutt.iter().map(|&v| v as f32).collect(),
-                transt: transt.iter().map(|&v| v as f32).collect(),
-                sphalbt: sphalbt.iter().map(|&v| v as f32).collect(),
-                normext: normext.iter().map(|&v| v as f32).collect(),
-                tsmax: tsmax.iter().map(|&v| v as f32).collect(),
-                tsmin: tsmin.iter().map(|&v| v as f32).collect(),
-                nbfic: nbfic.iter().map(|&v| v as f32).collect(),
-                nbfi,
-                ttv: ttv.iter().map(|&v| v as f32).collect(),
+                rolutt: to_f32(&rolutt),
+                transt: to_f32(&transt),
+                sphalbt: to_f32(&sphalbt),
+                normext: to_f32(&normext),
+                tsmax: to_f32(&tsmax),
+                tsmin: to_f32(&tsmin),
+                nbfic: to_f32(&nbfic),
+                nbfi: nbfi.as_array().to_vec(),
+                ttv: to_f32(&ttv),
                 tts: tts_arr,
-                indts,
+                indts: indts.as_array().to_vec(),
                 nsr_bands,
             },
         })
@@ -71,20 +75,20 @@ impl PyAuxiliaryData {
     #[new]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        dem: Vec<i16>,
-        wv: Vec<i16>,
-        oz: Vec<i16>,
-        ratiob1: Vec<i16>,
-        ratiob2: Vec<i16>,
-        ratiob7: Vec<i16>,
-        intratiob1: Vec<i16>,
-        intratiob2: Vec<i16>,
-        intratiob7: Vec<i16>,
-        slpratiob1: Vec<i16>,
-        slpratiob2: Vec<i16>,
-        slpratiob7: Vec<i16>,
-        andwi: Vec<i16>,
-        sndwi: Vec<i16>,
+        dem: PyReadonlyArray1<'_, i16>,
+        wv: PyReadonlyArray1<'_, i16>,
+        oz: PyReadonlyArray1<'_, i16>,
+        ratiob1: PyReadonlyArray1<'_, i16>,
+        ratiob2: PyReadonlyArray1<'_, i16>,
+        ratiob7: PyReadonlyArray1<'_, i16>,
+        intratiob1: PyReadonlyArray1<'_, i16>,
+        intratiob2: PyReadonlyArray1<'_, i16>,
+        intratiob7: PyReadonlyArray1<'_, i16>,
+        slpratiob1: PyReadonlyArray1<'_, i16>,
+        slpratiob2: PyReadonlyArray1<'_, i16>,
+        slpratiob7: PyReadonlyArray1<'_, i16>,
+        andwi: PyReadonlyArray1<'_, i16>,
+        sndwi: PyReadonlyArray1<'_, i16>,
         wv_scale: f64,
         oz_scale: f64,
         wv_default: f64,
@@ -92,20 +96,20 @@ impl PyAuxiliaryData {
     ) -> Self {
         Self {
             inner: AuxiliaryData {
-                dem,
-                wv,
-                oz,
-                ratiob1,
-                ratiob2,
-                ratiob7,
-                intratiob1,
-                intratiob2,
-                intratiob7,
-                slpratiob1,
-                slpratiob2,
-                slpratiob7,
-                andwi,
-                sndwi,
+                dem: dem.as_array().to_vec(),
+                wv: wv.as_array().to_vec(),
+                oz: oz.as_array().to_vec(),
+                ratiob1: ratiob1.as_array().to_vec(),
+                ratiob2: ratiob2.as_array().to_vec(),
+                ratiob7: ratiob7.as_array().to_vec(),
+                intratiob1: intratiob1.as_array().to_vec(),
+                intratiob2: intratiob2.as_array().to_vec(),
+                intratiob7: intratiob7.as_array().to_vec(),
+                slpratiob1: slpratiob1.as_array().to_vec(),
+                slpratiob2: slpratiob2.as_array().to_vec(),
+                slpratiob7: slpratiob7.as_array().to_vec(),
+                andwi: andwi.as_array().to_vec(),
+                sndwi: sndwi.as_array().to_vec(),
                 wv_scale,
                 oz_scale,
                 wv_default,
@@ -138,6 +142,10 @@ impl PyAuxiliaryData {
 /// utm_zone : int
 ///     UTM zone number; negative for southern hemisphere.
 /// use_orig_aero : bool
+/// scene_solar_zenith : float, optional
+///     Scene solar zenith from the product metadata (90 - SUN_ELEVATION), used
+///     for the scene-center atmospheric coefficients like C LaSRC. Defaults to
+///     the center pixel of ``solar_zenith``.
 ///
 /// Returns
 /// -------
@@ -147,7 +155,7 @@ impl PyAuxiliaryData {
 ///   "aerosol"   – 1-D int16 array (flattened)
 ///   "qa"        – 1-D uint8 array (flattened)
 #[pyfunction]
-#[pyo3(signature = (sensor_name, toa_bands, bt_bands, solar_zenith, solar_azimuth, view_zenith, view_azimuth, qa_band, lut, aux, ul_corner_x, ul_corner_y, pixel_size_x, pixel_size_y, utm_zone, use_orig_aero, num_threads=None))]
+#[pyo3(signature = (sensor_name, toa_bands, bt_bands, solar_zenith, solar_azimuth, view_zenith, view_azimuth, qa_band, lut, aux, ul_corner_x, ul_corner_y, pixel_size_x, pixel_size_y, utm_zone, use_orig_aero, num_threads=None, scene_solar_zenith=None))]
 #[allow(clippy::too_many_arguments)]
 fn process_surface_reflectance<'py>(
     py: Python<'py>,
@@ -168,6 +176,7 @@ fn process_surface_reflectance<'py>(
     utm_zone: i32,
     use_orig_aero: bool,
     num_threads: Option<usize>,
+    scene_solar_zenith: Option<f32>,
 ) -> PyResult<PyObject> {
     let sensor: Box<dyn Sensor> = match sensor_name {
         "LANDSAT_8" => Box::new(Landsat8),
@@ -205,6 +214,7 @@ fn process_surface_reflectance<'py>(
         &lut.inner,
         &aux.inner,
         &space_def,
+        scene_solar_zenith,
         use_orig_aero,
         num_threads,
     );

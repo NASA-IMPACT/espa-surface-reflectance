@@ -3,7 +3,7 @@
 use crate::constants::{
     AOT550NM, LOG_AOT550NM, NAOT_VALS, NAOT_X_NSOLAR, NAOT_X_NSUNANGLE, NPRES_VALS,
     NSOLAR_ZEN_VALS, NSUNANGLE_VALS, NVIEW_ZEN_VALS, TPRES, XTS_MIN, XTS_STEP, XTV_MIN,
-    XTV_STEP,
+    XTV_STEP_C,
 };
 use crate::geometry::scattering_angle;
 
@@ -117,16 +117,20 @@ impl LookupTables {
         pressure: f64,
         raot550nm: f64,
         xts: f64,
+        xtsmin: f32,
+        xtsstep: f32,
     ) -> f64 {
         let LutIndices { ip1, ip2, iaot1, iaot2 } = *indices;
         let xts_f = xts as f32;
         let raot = raot550nm as f32;
         let pres = pressure as f32;
 
-        let its = if xts_f <= XTS_MIN as f32 {
+        // C comptrans: its = (int)((xts - xtsmin) / xtsstep); the caller passes
+        // the view grid (xtvmin, xtvstep) when xts is a view zenith.
+        let its = if xts_f <= xtsmin {
             0
         } else {
-            ((xts_f - XTS_MIN as f32) / XTS_STEP as f32) as usize
+            ((xts_f - xtsmin) / xtsstep) as usize
         };
         let its = its.min(NSUNANGLE_VALS - 2);
 
@@ -200,7 +204,9 @@ impl LookupTables {
             let j = self.indts[is] as usize + (nbfic_i - nbfi_i as f32) as usize;
 
             if is != 0 && iv != 0 {
-                let mut isca = ((xtsmax_i - scaa) * 0.25f32 + 1.0f32) as usize;
+                // C: isca = (int) ((xtsmax[i] - scaa) * 0.25 + 1);  (double after * 0.25)
+                let isca_raw = ((xtsmax_i - scaa) as f64 * 0.25 + 1.0) as i64;
+                let mut isca = if isca_raw <= 0 { 1 } else { isca_raw as usize };
                 if isca == 0 {
                     isca = 1;
                 }
@@ -264,8 +270,13 @@ impl LookupTables {
         let xts_f = xts as f32;
 
         // View zenith index
-        let itv_f = (xtv_f - XTV_MIN as f32) / XTV_STEP as f32 + 1.0f32;
-        let itv = (itv_f as usize).min(NVIEW_ZEN_VALS - 2);
+        // C: if (xtv <= xtvmin) itv = 0; else itv = (int)((xtv - xtvmin) / xtvstep + 1.0);
+        let itv = if xtv_f <= XTV_MIN as f32 {
+            0
+        } else {
+            (((xtv_f - XTV_MIN as f32) / XTV_STEP_C) as f64 + 1.0) as usize
+        };
+        let itv = itv.min(NVIEW_ZEN_VALS - 2);
 
         // Solar zenith index
         let its = if xts_f <= XTS_MIN as f32 {
@@ -293,12 +304,14 @@ impl LookupTables {
             0.0
         };
 
-        // AOT interpolation in LOG space (C uses float for log)
+        // AOT interpolation in log space.
+        // C: deltaaot = logaot550nm[iaot2] - logaot550nm[iaot1];              (float)
+        //    deltaaot = (log(raot550nm) - logaot550nm[iaot1]) / deltaaot;    (double, stored float)
         let raot_f = raot550nm as f32;
-        let log_raot = raot_f.ln();
         let log_aot1 = LOG_AOT550NM[iaot1] as f32;
         let log_aot2 = LOG_AOT550NM[iaot2] as f32;
-        let deltaaot: f32 = (log_raot - log_aot1) / (log_aot2 - log_aot1);
+        let dlog: f32 = log_aot2 - log_aot1;
+        let deltaaot: f32 = (((raot_f as f64).ln() - log_aot1 as f64) / dlog as f64) as f32;
 
         let roiaot1 = self.interp_refl_at_scat_angle(iband, ip1, iaot1, scaa, its, itv, t, u);
         let roiaot2 = self.interp_refl_at_scat_angle(iband, ip1, iaot2, scaa, its, itv, t, u);
@@ -388,7 +401,7 @@ mod tests {
     fn test_interp_transmission_range() {
         let lut = make_test_lut();
         let idx = lut.find_indices(1013.0, 0.1);
-        let trans = lut.interp_transmission(&idx, 0, 1013.0, 0.1, 30.0);
+        let trans = lut.interp_transmission(&idx, 0, 1013.0, 0.1, 30.0, XTS_MIN as f32, XTS_STEP as f32);
         assert!(trans > 0.0 && trans <= 1.0, "trans={trans}");
     }
 

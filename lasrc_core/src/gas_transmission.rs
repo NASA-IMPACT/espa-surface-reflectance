@@ -11,20 +11,22 @@ pub struct GasCoefficients {
 /// Gas transmission values for a given atmospheric state.
 pub struct GasTransmission {
     /// Ozone transmission
-    pub tgoz: f64,
+    pub tgoz: f32,
     /// Water vapor transmission (full path)
-    pub tgwv: f64,
+    pub tgwv: f32,
     /// Water vapor transmission (solar half-path)
-    pub tgwvhalf: f64,
+    pub tgwvhalf: f32,
     /// Other gas transmission
-    pub tgog: f64,
+    pub tgog: f32,
     /// Combined gas transmission (tgog * tgoz)
-    pub tgo: f64,
+    pub tgo: f32,
 }
 
 /// Compute gas transmissions for a given band and atmospheric state.
 ///
-/// Ported from `comptg()` in C `lut_subr.c`.
+/// Ported from `comptg()` in C `lut_subr.c`. Inputs and outputs are float like
+/// C; the gas coefficients are double in C, so expressions using them (and the
+/// math.h calls) are evaluated in double before being stored as float.
 ///
 /// # Arguments
 /// * `coeff` - Band-specific gas coefficients
@@ -35,30 +37,26 @@ pub struct GasTransmission {
 /// * `atm_pres` - Normalized atmospheric pressure (pres/1013)
 pub fn compute_gas_transmission(
     coeff: &GasCoefficients,
-    xmus: f64,
-    xmuv: f64,
-    uoz: f64,
-    uwv: f64,
-    atm_pres: f64,
+    xmus: f32,
+    xmuv: f32,
+    uoz: f32,
+    uwv: f32,
+    atm_pres: f32,
 ) -> GasTransmission {
-    // C: float m = 1.0 / xmus + 1.0 / xmuv;
-    // 1.0 is double, xmus is float, so division is double, sum is double,
-    // but m is stored as float.
-    let m: f32 = (1.0 / xmus + 1.0 / xmuv) as f32;
+    // C: float m = 1.0 / xmus + 1.0 / xmuv;  (1.0 is double)
+    let m: f32 = (1.0 / xmus as f64 + 1.0 / xmuv as f64) as f32;
 
-    // C: *tgoz = exp(oztransa[iband] * m * uoz);
-    // oztransa is double, m and uoz are float — promotes to double for exp
-    let tgoz = (coeff.oztransa * m as f64 * uoz).exp();
+    // C: *tgoz = exp(oztransa[iband] * m * uoz);  (oztransa is double)
+    let tgoz = (coeff.oztransa * m as f64 * uoz as f64).exp() as f32;
 
     // C: float x = m * uwv; float a = wvtransa; float b = wvtransb;
-    let x: f32 = m * uwv as f32;
+    let x: f32 = m * uwv;
     let a: f32 = coeff.wvtransa as f32;
     let b: f32 = coeff.wvtransb as f32;
 
     // C: *tgwv = exp(-a * pow(x, b));
-    // a, x, b are float, pow is double, exp is double
     let tgwv = if x as f64 > 1e-06 {
-        (-(a as f64) * (x as f64).powf(b as f64)).exp()
+        (-(a as f64) * (x as f64).powf(b as f64)).exp() as f32
     } else {
         1.0
     };
@@ -66,18 +64,19 @@ pub fn compute_gas_transmission(
     // C: x *= 0.5; *tgwvhalf = exp(-a * pow(x, b));
     let xhalf: f32 = x * 0.5f32;
     let tgwvhalf = if xhalf as f64 > 1e-06 {
-        (-(a as f64) * (xhalf as f64).powf(b as f64)).exp()
+        (-(a as f64) * (xhalf as f64).powf(b as f64)).exp() as f32
     } else {
         1.0
     };
 
-    // C: *tgog = -(ogtransa1[iband] * atm_pres) * pow(m, exp(-(ogtransb0[iband] + ogtransb1[iband] * atm_pres)));
-    // *tgog = exp(*tgog);
-    // Note: atm_pres is float in C
-    let atm_pres_f = atm_pres as f32;
-    let exponent = (-(coeff.ogtransb0 + coeff.ogtransb1 * atm_pres_f as f64)).exp();
-    let tgog = (-(coeff.ogtransa1 * atm_pres_f as f64) * (m as f64).powf(exponent)).exp();
+    // C: *tgog = -(ogtransa1[iband] * atm_pres) *
+    //        pow(m, exp(-(ogtransb0[iband] + ogtransb1[iband] * atm_pres)));
+    //    *tgog = exp(*tgog);
+    let exponent = (-(coeff.ogtransb0 + coeff.ogtransb1 * atm_pres as f64)).exp();
+    let tgog_arg = (-(coeff.ogtransa1 * atm_pres as f64) * (m as f64).powf(exponent)) as f32;
+    let tgog = (tgog_arg as f64).exp() as f32;
 
+    // C: *tgo = tgog * tgoz;
     let tgo = tgog * tgoz;
 
     GasTransmission {
