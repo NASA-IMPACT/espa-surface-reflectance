@@ -131,7 +131,7 @@ pub fn atmcorlamb2_new(
 /// * `xfi`          - Relative azimuth angle (degrees)
 /// * `cosxfi`       - Cosine of relative azimuth
 /// * `raot550nm`    - Aerosol optical thickness at 550 nm
-/// * `pressure`     - Surface pressure (mbar)
+/// * `pres`         - Surface pressure (mbar)
 /// * `uoz`          - Ozone amount (cm-atm)
 /// * `uwv`          - Water vapour amount (g/cm²)
 /// * `rotoa`        - TOA reflectance
@@ -147,16 +147,17 @@ pub fn atmcorlamb2(
     gas_coeff: &GasCoefficients,
     tauray_band: f64,
     iband: usize,
-    xts: f64,
-    xtv: f64,
-    xmus: f64,
-    xmuv: f64,
-    xfi: f64,
+    // C takes the angles, pressure and gas amounts as float
+    xts: f32,
+    xtv: f32,
+    xmus: f32,
+    xmuv: f32,
+    xfi: f32,
     cosxfi: f64,
     raot550nm: f64,
-    pressure: f64,
-    uoz: f64,
-    uwv: f64,
+    pres: f32,
+    uoz: f32,
+    uwv: f32,
     rotoa: f64,
     lambda: &[f64],
     max_band_idx: usize,
@@ -164,10 +165,6 @@ pub fn atmcorlamb2(
 ) -> AtmCorrResult {
     // C uses float (f32) throughout atmcorlamb2. Truncate all intermediate
     // values to f32 after calling f64 helper functions to match C precision.
-
-    // C: all angle, pressure and gas amount inputs are float
-    let (xts, xtv, xmus, xmuv, xfi) = (xts as f32, xtv as f32, xmus as f32, xmuv as f32, xfi as f32);
-    let (pres, uoz, uwv) = (pressure as f32, uoz as f32, uwv as f32);
 
     // Modify AOT based on Angstrom coefficient and wavelength.
     // C (atmcorlamb2, unlike atmcorlamb2_new): static const double lambda_sf = 1/0.55;
