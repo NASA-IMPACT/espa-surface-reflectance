@@ -79,7 +79,10 @@ pub fn atmcorlamb2_new(
     eps: f64,
 ) -> f64 {
     // C uses float throughout atmcorlamb2_new; match that precision.
-    let lambda_sf: f32 = 1.0 / 0.55;
+    // C: static const float lambda_sf = 1/0.55; -- the division is done in
+    // double and only the result is stored as float (1 ULP above the f32
+    // division), which pow() then amplifies.
+    let lambda_sf: f32 = (1.0f64 / 0.55f64) as f32;
 
     let mut mraot550nm: f32 = if eps < 0.0 || iband >= lambda.len() {
         raot550nm as f32
