@@ -1041,8 +1041,9 @@ pub fn compute_surface_reflectance(
                     // |rsurf - roslamb| as the aerosol level indicator.
                     // Matches C code compute_landsat_refl.c lines 1758-1780.
                     if iband == bi.coastal {
-                        let rsurf = sband[bi.coastal][pix] as f64;
-                        let tmpf = (rsurf - roslamb).abs();
+                        // C: float tmpf = fabs(rsurf - roslamb); both operands float
+                        let rsurf = sband[bi.coastal][pix];
+                        let tmpf = (rsurf - roslamb as f32).abs() as f64;
                         let bits = if tmpf <= LOW_AERO_THRESH {
                             1u8 << AERO1_QA
                         } else if tmpf < AVG_AERO_THRESH {
@@ -1705,9 +1706,10 @@ pub fn compute_sentinel_surface_reflectance(
     // Serial post-pass: set aerosol QA bits on B01 (not B00 like Landsat)
     for pix in 0..npix {
         if is_fill_pixel(qaband[pix]) { continue; }
-        let rsurf = sband[DNS_BAND1][pix] as f64;
+        // C: float tmpf = fabs(rsurf - roslamb); both operands float
+        let rsurf = sband[DNS_BAND1][pix];
         let roslamb = sr_flat[DNS_BAND1][pix];
-        let tmpf = (rsurf - roslamb).abs();
+        let tmpf = (rsurf - roslamb as f32).abs() as f64;
         if tmpf <= LOW_AERO_THRESH {
             ipflag[pix] |= 1u8 << AERO1_QA;
         } else if tmpf < AVG_AERO_THRESH {
