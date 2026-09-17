@@ -493,8 +493,11 @@ pub fn compute_surface_reflectance(
     // ── Step 1: Scene-center atmospheric state ──
     let center_line_geo = (nlines / 2) as i32;
     let center_samp_geo = (nsamps / 2) as i32;
+    // C init_sr_refl stores these in `float center_lat, center_lon`
     let (scene_center_lat, scene_center_lon) =
         utm_to_deg(space_def, center_line_geo, center_samp_geo);
+    let (scene_center_lat, scene_center_lon) =
+        (scene_center_lat as f32 as f64, scene_center_lon as f32 as f64);
     let (pressure, uoz, uwv) = extract_atm_params_scene_center(aux, scene_center_lat, scene_center_lon);
 
     // Scene-center geometry, as C lasrc.c / init_sr_refl set it for Landsat:
@@ -665,8 +668,11 @@ pub fn compute_surface_reflectance(
             };
 
             // C: img.l = i - 0.5; img.s = j + 0.5; from_space(space, &img, &geo);
+            // C stores the result in `float lat, lon`, so the CMG lookup below
+            // sees the f32-rounded position.
             let (pixel_lat, pixel_lon) =
                 utm_to_deg_gctp(space_def, iline as f64 - 0.5, isamp as f64 + 0.5);
+            let (pixel_lat, pixel_lon) = (pixel_lat as f32 as f64, pixel_lon as f32 as f64);
 
             // Look up CMG position for slope/intercept computation
             let cmg = latlon_to_cmg(pixel_lat, pixel_lon);
@@ -1156,8 +1162,11 @@ pub fn compute_sentinel_surface_reflectance(
     // Use rounded nearest-neighbor CMG lookup matching C's init_sr_refl
     let center_line_geo = (nlines / 2) as i32;
     let center_samp_geo = (nsamps / 2) as i32;
+    // C init_sr_refl stores these in `float center_lat, center_lon`
     let (scene_center_lat, scene_center_lon) =
         utm_to_deg(space_def, center_line_geo, center_samp_geo);
+    let (scene_center_lat, scene_center_lon) =
+        (scene_center_lat as f32 as f64, scene_center_lon as f32 as f64);
     let (pressure, uoz, uwv) = extract_atm_params_scene_center(aux, scene_center_lat, scene_center_lon);
 
     // Build gas coefficients per band from sensor-specific constants.
@@ -1297,7 +1306,9 @@ pub fn compute_sentinel_surface_reflectance(
             }
 
             // Compute per-pixel lat/lon from image coordinates
+            // C: utmtodeg into `float lat, lon`
             let (pixel_lat, pixel_lon) = utm_to_deg(space_def, win_i as i32, win_j as i32);
+            let (pixel_lat, pixel_lon) = (pixel_lat as f32 as f64, pixel_lon as f32 as f64);
 
             // Look up CMG position for slope/intercept computation
             let cmg = latlon_to_cmg(pixel_lat, pixel_lon);
