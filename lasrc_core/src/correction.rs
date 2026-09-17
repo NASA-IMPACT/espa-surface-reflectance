@@ -751,17 +751,19 @@ pub fn compute_surface_reflectance(
             let sr_swir2 = sband[bi.swir2][spix] as f64;
             let sr_swir2_half = sr_swir2 * 0.5;
             let denom = sr_nir + sr_swir2_half;
-            let mut xndwi = if denom.abs() > 1.0e-10 {
+            // C: float xndwi -- the ratio is computed in double but stored as float
+            let mut xndwi = (if denom.abs() > 1.0e-10 {
                 (sr_nir - sr_swir2_half) / denom
             } else {
                 0.0
-            };
+            }) as f32;
 
-            // Clamp NDWI using andwi/sndwi thresholds from CMG (uses ratio_pix11)
+            // Clamp NDWI using andwi/sndwi thresholds from CMG (uses ratio_pix11).
+            // C: float ndwi_th1, ndwi_th2
             let andwi_val = safe_read(&aux.andwi, ratio_pix11);
             let sndwi_val = safe_read(&aux.sndwi, ratio_pix11);
-            let ndwi_th1 = (andwi_val as f64 + 2.0 * sndwi_val as f64) * 0.001;
-            let ndwi_th2 = (andwi_val as f64 - 2.0 * sndwi_val as f64) * 0.001;
+            let ndwi_th1 = ((andwi_val as f64 + 2.0 * sndwi_val as f64) * 0.001) as f32;
+            let ndwi_th2 = ((andwi_val as f64 - 2.0 * sndwi_val as f64) * 0.001) as f32;
             if xndwi > ndwi_th1 {
                 xndwi = ndwi_th1;
             }
@@ -777,10 +779,11 @@ pub fn compute_surface_reflectance(
 
             // Compute band ratios from NDWI, slopes, and intercepts
             // C stores these in float arrays, so truncate to f32 precision
-            erelc[bi.coastal] = (xndwi * slprb1 + intrb1) as f32 as f64;
-            erelc[bi.blue] = (xndwi * slprb2 + intrb2) as f32 as f64;
+            // C: erelc[], xndwi and the slope/intercept values are all float
+            erelc[bi.coastal] = (xndwi * slprb1 as f32 + intrb1 as f32) as f64;
+            erelc[bi.blue] = (xndwi * slprb2 as f32 + intrb2 as f32) as f64;
             erelc[bi.red] = 1.0;
-            erelc[bi.swir2] = (xndwi * slprb7 + intrb7) as f32 as f64;
+            erelc[bi.swir2] = (xndwi * slprb7 as f32 + intrb7 as f32) as f64;
 
             // Set TOA reflectance values for the needed bands
             // C: troatm[] is float, so truncate
