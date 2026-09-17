@@ -998,12 +998,16 @@ pub fn compute_surface_reflectance(
                         (toa_bands[iband][(iline, isamp)] / xmus)
                             .clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32) as f64
                     } else {
-                        // Reconstruct TOA from climatological SR
+                        // Reconstruct TOA from climatological SR.
+                        // C: rotoa = (rsurf * bttatmg[ib] / (1.0 - bsatm[ib] * rsurf)
+                        //             + broatm[ib]) * btgo[ib];
+                        // rsurf, bttatmg, bsatm, broatm and btgo are float, so the
+                        // two products are float; only the `1.0 -` promotes to double.
                         let rsurf = sband[iband][pix]; // f32
-                        let rotoa: f32 = ((rsurf as f64 * bttatmg[iband]
-                            / (1.0 - bsatm[iband] * rsurf as f64)
-                            + broatm[iband])
-                            * btgo[iband]) as f32;
+                        let num = rsurf * bttatmg[iband] as f32;
+                        let den = 1.0 - (bsatm[iband] as f32 * rsurf) as f64;
+                        let rotoa: f32 =
+                            ((num as f64 / den + broatm[iband]) * btgo[iband]) as f32;
 
                         atmcorlamb2_new(
                             &atm_coeff[iband],
