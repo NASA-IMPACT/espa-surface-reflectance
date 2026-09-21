@@ -30,8 +30,13 @@ import click
                    "'numpy' raw flat binary")
 @click.option("--aux-source", default="VIIRS", type=click.Choice(["VIIRS", "MODIS"]),
               help="Auxiliary data source (default: VIIRS)")
+@click.option("--num-threads", default=0, show_default=True, envvar="RAYON_NUM_THREADS",
+              type=click.IntRange(min=0),
+              help="Rayon worker threads; 0 uses all available cores "
+                   "(env: RAYON_NUM_THREADS).")
 def landsat(input_path, output_path, angle_hdf, intref_hdf, transm_hdf, sphera_hdf,
-            wv_oz_hdf, dem_hdf, ratio_hdf, sensor, output_format, aux_source):
+            wv_oz_hdf, dem_hdf, ratio_hdf, sensor, output_format, aux_source,
+            num_threads):
     """LaSRC: Compute Landsat surface reflectance."""
     from lasrc.pipeline import AuxFilePaths, process_scene
 
@@ -56,6 +61,7 @@ def landsat(input_path, output_path, angle_hdf, intref_hdf, transm_hdf, sphera_h
         output_path=output_path,
         sensor_name=sensor,
         output_format=output_format,
+        num_threads=num_threads or None,
     )
     click.echo(f"Output written to {output_path}")
 
@@ -84,8 +90,12 @@ def landsat(input_path, output_path, angle_hdf, intref_hdf, transm_hdf, sphera_h
               help="Sensor name (auto-detected from input path if omitted)")
 @click.option("--output-format", default="espa", type=click.Choice(["espa", "numpy"]),
               help="Output format: 'espa' ENVI .img/.hdr (default), 'numpy' raw flat binary")
+@click.option("--num-threads", default=0, show_default=True, envvar="RAYON_NUM_THREADS",
+              type=click.IntRange(min=0),
+              help="Rayon worker threads; 0 uses all available cores "
+                   "(env: RAYON_NUM_THREADS).")
 def sentinel(input_path, output_path, angle_hdf, intref_hdf, transm_hdf, sphera_hdf,
-             wv_oz_hdf, dem_hdf, ratio_hdf, sensor, output_format):
+             wv_oz_hdf, dem_hdf, ratio_hdf, sensor, output_format, num_threads):
     """LaSRC: Compute Sentinel-2 surface reflectance."""
     from lasrc.pipeline_sentinel import process_sentinel_scene
 
@@ -105,6 +115,7 @@ def sentinel(input_path, output_path, angle_hdf, intref_hdf, transm_hdf, sphera_
         output_path=output_path,
         sensor_name=sensor,
         output_format=output_format,
+        num_threads=num_threads or None,
     )
     click.echo(f"Output written to {output_path}")
 

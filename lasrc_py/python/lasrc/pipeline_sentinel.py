@@ -24,8 +24,12 @@ def process_sentinel_scene(
     output_path: str | Path,
     sensor_name: str = "SENTINEL_2B",
     output_format: str = "espa",
+    num_threads: int | None = None,
 ) -> dict:
-    """Process a Sentinel-2 SAFE archive to surface reflectance."""
+    """Process a Sentinel-2 SAFE archive to surface reflectance.
+
+    ``num_threads`` sets the Rayon worker pool; 0 or None lets Rayon choose.
+    """
     sensor_config = SENSORS[sensor_name]
     nsr_bands = sensor_config["nsr_bands"]  # 13
 
@@ -76,6 +80,7 @@ def process_sentinel_scene(
         pixel_size_x=profile["pixel_size_x"],
         pixel_size_y=profile["pixel_size_y"],
         utm_zone=utm_zone,
+        num_threads=num_threads,
     )
 
     # Reshape and write output
