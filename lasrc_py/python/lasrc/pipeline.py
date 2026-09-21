@@ -51,6 +51,7 @@ def process_scene(
     sensor_name: str = "LANDSAT_8",
     output_format: str = "cog",
     use_orig_aero: bool = False,
+    num_threads: int | None = None,
 ) -> dict:
     """Process a scene from TOA to surface reflectance.
 
@@ -68,6 +69,8 @@ def process_scene(
         "cog", "espa", or "numpy".
     use_orig_aero : bool
         Use original aerosol algorithm (not yet implemented).
+    num_threads : int, optional
+        Rayon worker threads; 0 or None lets Rayon choose (all available cores).
     """
     sensor_config = SENSORS[sensor_name]
 
@@ -134,6 +137,7 @@ def process_scene(
         utm_zone=utm_zone,
         use_orig_aero=use_orig_aero,
         scene_solar_zenith=scene_solar_zenith,
+        num_threads=num_threads,
     )
 
     for i in range(len(result["sr_bands"])):
