@@ -1,10 +1,10 @@
-"""Tests for Sentinel-2 SAFE metadata parsing."""
+"""Tests for Sentinel-2 SAFE file discovery and metadata parsing."""
 
 from pathlib import Path
 
 import pytest
 
-from lasrc.io.sentinel import _find_tile_metadata, _parse_angles
+from lasrc.io.sentinel import _find_band_file, _find_tile_metadata, _parse_angles
 
 MTD_TL_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <n1:Level-1C_Tile_ID xmlns:n1="https://psd-15.sentinel2.eo.esa.int/PSD/S2_PDI_Level-1C_Tile_Metadata.xsd">
@@ -92,3 +92,40 @@ def test_parse_angles_rejects_product_metadata(tmp_path):
     safe = _make_safe(tmp_path, ["L1C_A"])
     with pytest.raises(ValueError, match="Mean_Sun_Angle"):
         _parse_angles(safe / "MTD_MSIL1C.xml")
+
+
+def _add_jp2(safe: Path, relpath: str) -> Path:
+    path = safe / relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    return path
+
+
+def test_find_band_file_ignores_qi_masks(tmp_path):
+    safe = _make_safe(tmp_path, ["L1C_A"])
+    _add_jp2(safe, "GRANULE/L1C_A/QI_DATA/MSK_QUALIT_B01.jp2")
+    _add_jp2(safe, "GRANULE/L1C_A/QI_DATA/MSK_DETFOO_B01.jp2")
+    band = _add_jp2(safe, "GRANULE/L1C_A/IMG_DATA/T14TLS_20250127T174641_B01.jp2")
+    assert _find_band_file(safe, "B01") == band
+
+
+def test_find_band_file_does_not_confuse_b8a_with_b08(tmp_path):
+    safe = _make_safe(tmp_path, ["L1C_A"])
+    _add_jp2(safe, "GRANULE/L1C_A/IMG_DATA/T14TLS_20250127T174641_B8A.jp2")
+    b08 = _add_jp2(safe, "GRANULE/L1C_A/IMG_DATA/T14TLS_20250127T174641_B08.jp2")
+    assert _find_band_file(safe, "B08") == b08
+
+
+def test_find_band_file_missing_raises(tmp_path):
+    safe = _make_safe(tmp_path, ["L1C_A"])
+    _add_jp2(safe, "GRANULE/L1C_A/QI_DATA/MSK_QUALIT_B01.jp2")
+    with pytest.raises(FileNotFoundError, match="B01"):
+        _find_band_file(safe, "B01")
+
+
+def test_find_band_file_multiple_raises(tmp_path):
+    safe = _make_safe(tmp_path, ["L1C_A", "L1C_B"])
+    _add_jp2(safe, "GRANULE/L1C_A/IMG_DATA/T14TLS_20250127T174641_B01.jp2")
+    _add_jp2(safe, "GRANULE/L1C_B/IMG_DATA/T14TLS_20250127T174641_B01.jp2")
+    with pytest.raises(ValueError, match="B01"):
+        _find_band_file(safe, "B01")
