@@ -29,3 +29,6 @@ dev = [
 [project.scripts]
 lasrc-landsat = "lasrc.cli:landsat"
 lasrc-sentinel = "lasrc.cli:sentinel"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
