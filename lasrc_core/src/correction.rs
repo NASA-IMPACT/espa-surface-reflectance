@@ -3,6 +3,8 @@
 //!
 //! Ported from the C LaSRC main processing loop.
 
+use std::borrow::Cow;
+
 use ndarray::{Array2, ArrayView2};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
@@ -1150,12 +1152,10 @@ pub fn compute_sentinel_surface_reflectance(
 
     // ── Step 1: Fill detection from input QA band ──
     // Bit 0 = fill (set by reader based on DN==0 for any band)
-    let qaband: Vec<u16> = (0..npix)
-        .map(|pix| {
-            let (i, j) = (pix / nsamps, pix % nsamps);
-            qa_band[(i, j)]
-        })
-        .collect();
+    let qaband: Cow<[u16]> = match qa_band.as_slice() {
+        Some(s) => Cow::Borrowed(s),
+        None => Cow::Owned(qa_band.iter().copied().collect()),
+    };
 
     // ── Step 2: Scene-center geometry (scalar angles) ──
     let xts = solar_zenith;
