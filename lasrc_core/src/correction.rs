@@ -1664,78 +1664,75 @@ pub fn compute_sentinel_surface_reflectance(
     ipflag_expand_failed_sentinel(&mut ipflag, nlines, nsamps);
     aero_avg_failed_sentinel(&qaband, &mut ipflag, &mut taero, &mut teps, nlines, nsamps);
 
-    // ── Step 9: Final per-pixel atmospheric correction ──
-    let sr_flat: Vec<Vec<f64>> = (0..nbands)
-        .map(|_| vec![0.0f64; npix])
+    // ── Step 9: Final per-pixel atmospheric correction, scaled to uint16 ──
+    // SR is written straight to the scaled output so no full-scene f64 copy
+    // of all bands is ever held. The B01 aerosol QA bits need the unscaled
+    // B01 value, so they are computed here too.
+    let offset_f32 = BAND_OFFSET_REFL as f32;
+    let mult_f32 = MULT_FACTOR_REFL as f32;
+    let mut sr_out: Vec<Vec<u16>> = (0..nbands)
+        .map(|_| vec![SR_FILL_VALUE; npix])
         .collect();
 
-    pool.install(|| {
-        (0..nlines).into_par_iter().for_each(|iline| {
-            for isamp in 0..nsamps {
-                let pix = iline * nsamps + isamp;
-                if is_fill_pixel(qaband[pix]) { continue; }
-
-                let raot = taero[pix] as f64;
-                let eps = teps[pix] as f64;
-
-                for iband in 0..nbands {
-                    let val = if iband == DNS_BAND10 {
-                        toa_bands[iband][(iline, isamp)] as f64
-                    } else {
-                        let rotoa = toa_bands[iband][(iline, isamp)] as f64;
-                        atmcorlamb2_new(
-                            &atm_coeff[iband], tgo_arr[iband], iband,
-                            raot, normext_p0a3[iband],
-                            rotoa, lambda, eps,
-                        ).clamp(MIN_VALID_REFL, MAX_VALID_REFL)
-                    };
-
-                    // SAFETY: Each iline is processed by exactly one thread
-                    // (Rayon's into_par_iter guarantees this). Within a thread,
-                    // pix = iline * nsamps + isamp produces unique indices for
-                    // that row, so no two threads write to the same index.
-                    unsafe {
-                        let ptr = sr_flat[iband].as_ptr() as *mut f64;
-                        *ptr.add(pix) = val;
-                    }
-                }
-            }
-        });
-    });
-
-    // Serial post-pass: set aerosol QA bits on B01 (not B00 like Landsat)
-    for pix in 0..npix {
-        if is_fill_pixel(qaband[pix]) { continue; }
-        // C: float tmpf = fabs(rsurf - roslamb); both operands float
-        let rsurf = sband[DNS_BAND1][pix];
-        let roslamb = sr_flat[DNS_BAND1][pix];
-        let tmpf = (rsurf - roslamb as f32).abs() as f64;
-        if tmpf <= LOW_AERO_THRESH {
-            ipflag[pix] |= 1u8 << AERO1_QA;
-        } else if tmpf < AVG_AERO_THRESH {
-            ipflag[pix] |= 1u8 << AERO2_QA;
-        } else {
-            ipflag[pix] |= (1u8 << AERO1_QA) | (1u8 << AERO2_QA);
+    // Transpose band-major buffers into per-row sets of band slices so each
+    // Rayon task owns one output row across all bands.
+    let mut row_slices: Vec<Vec<&mut [u16]>> = (0..nlines).map(|_| Vec::with_capacity(nbands)).collect();
+    for band in sr_out.iter_mut() {
+        for (row, chunk) in row_slices.iter_mut().zip(band.chunks_mut(nsamps)) {
+            row.push(chunk);
         }
     }
 
-    // ── Step 10: Scale to output integers ──
-    let offset_f32 = BAND_OFFSET_REFL as f32;
-    let mult_f32 = MULT_FACTOR_REFL as f32;
-    let sr_bands: Vec<Array2<u16>> = sr_flat
-        .iter()
-        .map(|band| {
-            Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
-                let pix = i * nsamps + j;
-                if is_fill_pixel(qaband[pix]) {
-                    SR_FILL_VALUE
-                } else {
-                    let sband_f32 = band[pix] as f32;
-                    let tmpf = (sband_f32 + offset_f32) * mult_f32;
-                    tmpf.round().clamp(0.0, u16::MAX as f32) as u16
+    pool.install(|| {
+        row_slices
+            .into_par_iter()
+            .zip(ipflag.par_chunks_mut(nsamps))
+            .enumerate()
+            .for_each(|(iline, (mut sr_row, ipflag_row))| {
+                for isamp in 0..nsamps {
+                    let pix = iline * nsamps + isamp;
+                    if is_fill_pixel(qaband[pix]) { continue; }
+
+                    let raot = taero[pix] as f64;
+                    let eps = teps[pix] as f64;
+
+                    for iband in 0..nbands {
+                        let val = if iband == DNS_BAND10 {
+                            toa_bands[iband][(iline, isamp)] as f64
+                        } else {
+                            let rotoa = toa_bands[iband][(iline, isamp)] as f64;
+                            atmcorlamb2_new(
+                                &atm_coeff[iband], tgo_arr[iband], iband,
+                                raot, normext_p0a3[iband],
+                                rotoa, lambda, eps,
+                            ).clamp(MIN_VALID_REFL, MAX_VALID_REFL)
+                        };
+
+                        let val_f32 = val as f32;
+                        let tmpf = (val_f32 + offset_f32) * mult_f32;
+                        sr_row[iband][isamp] = tmpf.round().clamp(0.0, u16::MAX as f32) as u16;
+
+                        // Aerosol QA bits on B01 (not B00 like Landsat)
+                        if iband == DNS_BAND1 {
+                            // C: float tmpf = fabs(rsurf - roslamb); both operands float
+                            let rsurf = sband[DNS_BAND1][pix];
+                            let diff = (rsurf - val_f32).abs() as f64;
+                            ipflag_row[isamp] |= if diff <= LOW_AERO_THRESH {
+                                1u8 << AERO1_QA
+                            } else if diff < AVG_AERO_THRESH {
+                                1u8 << AERO2_QA
+                            } else {
+                                (1u8 << AERO1_QA) | (1u8 << AERO2_QA)
+                            };
+                        }
+                    }
                 }
-            })
-        })
+            });
+    });
+
+    let sr_bands: Vec<Array2<u16>> = sr_out
+        .into_iter()
+        .map(|band| Array2::from_shape_vec((nlines, nsamps), band).expect("band length is nlines * nsamps"))
         .collect();
 
     // No brightness temperature bands for Sentinel
