@@ -5,6 +5,8 @@
 use crate::atmospheric::{AtmCorrCoefficients, atmcorlamb2_new};
 use crate::constants::*;
 
+use rayon::prelude::*;
+
 /// Result of aerosol retrieval for a single pixel.
 #[derive(Debug, Clone)]
 pub struct AerosolResult {
@@ -690,56 +692,64 @@ pub fn aero_avg_failed_sentinel(
     let mut tepss = vec![0.0f32; npixels];
     let mut smflag = vec![false; npixels];
 
-    // Pass 1: Average from non-fill, non-failed neighbors
-    let mut one_filled = false;
-    let mut nbpixnf = 0usize;
+    // Pass 1: Average from non-fill, non-failed neighbors. Each pixel reads
+    // only the unmodified ipflag/taero/teps and writes only its own outputs,
+    // so rows are independent (C runs this loop under OpenMP).
+    let (ipflag_ro, taero_ro, teps_ro) = (&*ipflag, &*taero, &*teps);
+    let nbpixnf_per_row: Vec<usize> = taeros
+        .par_chunks_mut(nsamps)
+        .zip(tepss.par_chunks_mut(nsamps))
+        .zip(smflag.par_chunks_mut(nsamps))
+        .enumerate()
+        .map(|(line, ((taeros_row, tepss_row), smflag_row))| {
+            let mut row_nbpixnf = 0usize;
+            for samp in 0..nsamps {
+                let curr_pix = line * nsamps + samp;
 
-    for line in 0..nlines {
-        for samp in 0..nsamps {
-            let curr_pix = line * nsamps + samp;
-            smflag[curr_pix] = false;
-
-            if crate::constants::is_fill_pixel(qaband[curr_pix]) {
-                continue;
-            }
-
-            let mut taerosum: f32 = 0.0;
-            let mut tepssum: f32 = 0.0;
-            let mut nbaeroavg = 0usize;
-
-            for iline in -half_win..=half_win {
-                let wl = line as isize + iline;
-                if wl < 0 || wl >= nlines as isize {
+                if crate::constants::is_fill_pixel(qaband[curr_pix]) {
                     continue;
                 }
-                for isamp in -half_win..=half_win {
-                    let ws = samp as isize + isamp;
-                    if ws < 0 || ws >= nsamps as isize {
+
+                let mut taerosum: f32 = 0.0;
+                let mut tepssum: f32 = 0.0;
+                let mut nbaeroavg = 0usize;
+
+                for iline in -half_win..=half_win {
+                    let wl = line as isize + iline;
+                    if wl < 0 || wl >= nlines as isize {
                         continue;
                     }
+                    for isamp in -half_win..=half_win {
+                        let ws = samp as isize + isamp;
+                        if ws < 0 || ws >= nsamps as isize {
+                            continue;
+                        }
 
-                    let curr_win_pix = wl as usize * nsamps + ws as usize;
-                    // Include non-fill, non-failed pixels
-                    if ipflag[curr_win_pix] & (1u8 << IPFLAG_FILL) == 0
-                        && ipflag[curr_win_pix] & (1u8 << IPFLAG_FAILED) == 0
-                    {
-                        nbaeroavg += 1;
-                        taerosum += taero[curr_win_pix];
-                        tepssum += teps[curr_win_pix];
+                        let curr_win_pix = wl as usize * nsamps + ws as usize;
+                        // Include non-fill, non-failed pixels
+                        if ipflag_ro[curr_win_pix] & (1u8 << IPFLAG_FILL) == 0
+                            && ipflag_ro[curr_win_pix] & (1u8 << IPFLAG_FAILED) == 0
+                        {
+                            nbaeroavg += 1;
+                            taerosum += taero_ro[curr_win_pix];
+                            tepssum += teps_ro[curr_win_pix];
+                        }
                     }
                 }
-            }
 
-            if nbaeroavg > MIN_VALID_WINDOW_PIX {
-                taeros[curr_pix] = taerosum / nbaeroavg as f32;
-                tepss[curr_pix] = tepssum / nbaeroavg as f32;
-                smflag[curr_pix] = true;
-                one_filled = true;
-            } else {
-                nbpixnf += 1;
+                if nbaeroavg > MIN_VALID_WINDOW_PIX {
+                    taeros_row[samp] = taerosum / nbaeroavg as f32;
+                    tepss_row[samp] = tepssum / nbaeroavg as f32;
+                    smflag_row[samp] = true;
+                } else {
+                    row_nbpixnf += 1;
+                }
             }
-        }
-    }
+            row_nbpixnf
+        })
+        .collect();
+    let mut nbpixnf: usize = nbpixnf_per_row.iter().sum();
+    let one_filled = smflag.par_iter().any(|&f| f);
 
     // If nothing filled, use defaults for everything
     if !one_filled {

@@ -1650,7 +1650,9 @@ pub fn compute_sentinel_surface_reflectance(
     // ── Step 8: Post-processing ──
     aerosol_interp_sentinel(aero_window, &qaband, &mut ipflag, &mut taero, nlines, nsamps);
     ipflag_expand_failed_sentinel(&mut ipflag, nlines, nsamps);
-    aero_avg_failed_sentinel(&qaband, &mut ipflag, &mut taero, &mut teps, nlines, nsamps);
+    pool.install(|| {
+        aero_avg_failed_sentinel(&qaband, &mut ipflag, &mut taero, &mut teps, nlines, nsamps)
+    });
 
     // ── Step 9: Final per-pixel atmospheric correction, scaled to uint16 ──
     // SR is written straight to the scaled output so no full-scene f64 copy
