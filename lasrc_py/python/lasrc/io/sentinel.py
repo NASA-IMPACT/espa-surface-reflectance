@@ -42,8 +42,7 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
 
     # Parse metadata
     mtd_msil1c = safe_dir / "MTD_MSIL1C.xml"
-    mtd_tl = safe_dir / "MTD_TL.xml"
-    angles = _parse_angles(mtd_tl if mtd_tl.exists() else mtd_msil1c)
+    angles = _parse_angles(_find_tile_metadata(safe_dir))
     quantification_value, radiometric_offset = _parse_quantification(mtd_msil1c)
 
     # Read bands
@@ -133,53 +132,48 @@ def _resample_to_10m(
     return resampled[:nlines_10m, :nsamps_10m]
 
 
-def _parse_angles(xml_path: Path) -> dict:
-    """Extract scene-center mean angles from MTD_TL.xml or MTD_MSIL1C.xml."""
-    tree = ElementTree.parse(xml_path)
-    root = tree.getroot()
+def _find_tile_metadata(safe_dir: Path) -> Path:
+    """Locate the single granule-level MTD_TL.xml inside a SAFE archive."""
+    matches = sorted(Path(safe_dir).glob("GRANULE/*/MTD_TL.xml"))
+    if not matches:
+        raise FileNotFoundError(f"No GRANULE/*/MTD_TL.xml found in {safe_dir}")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Expected one GRANULE/*/MTD_TL.xml in {safe_dir}, found {len(matches)}"
+        )
+    return matches[0]
 
-    # Remove namespace prefix for easier searching
-    ns = ""
-    if root.tag.startswith("{"):
-        ns = root.tag.split("}")[0] + "}"
 
-    angles = {}
+def _parse_angles(mtd_tl: Path) -> dict:
+    """Extract scene-center mean sun and view angles from a granule MTD_TL.xml.
 
-    # Sun angles
-    sun_el = root.find(f".//{ns}Mean_Sun_Angle/{ns}ZENITH_ANGLE")
-    if sun_el is None:
-        sun_el = root.find(".//Mean_Sun_Angle/ZENITH_ANGLE")
-    if sun_el is not None:
-        angles["solar_zenith"] = float(sun_el.text)
-    else:
-        angles["solar_zenith"] = 30.0  # fallback
+    View angles are averaged across all bands listed in the metadata.
+    """
+    root = ElementTree.parse(mtd_tl).getroot()
 
-    sun_az = root.find(f".//{ns}Mean_Sun_Angle/{ns}AZIMUTH_ANGLE")
-    if sun_az is None:
-        sun_az = root.find(".//Mean_Sun_Angle/AZIMUTH_ANGLE")
-    if sun_az is not None:
-        angles["solar_azimuth"] = float(sun_az.text)
-    else:
-        angles["solar_azimuth"] = 150.0
+    def _find_all(path: str) -> list[float]:
+        return [float(e.text) for e in root.iterfind(path)]
 
-    # View angles — average across all bands
-    view_zen_els = root.findall(f".//{ns}Mean_Viewing_Incidence_Angle/{ns}ZENITH_ANGLE")
-    if not view_zen_els:
-        view_zen_els = root.findall(".//Mean_Viewing_Incidence_Angle/ZENITH_ANGLE")
-    if view_zen_els:
-        angles["view_zenith"] = np.mean([float(e.text) for e in view_zen_els])
-    else:
-        angles["view_zenith"] = 0.0
+    sun_zen = _find_all(".//{*}Mean_Sun_Angle/{*}ZENITH_ANGLE")
+    sun_az = _find_all(".//{*}Mean_Sun_Angle/{*}AZIMUTH_ANGLE")
+    if len(sun_zen) != 1 or len(sun_az) != 1:
+        raise ValueError(
+            f"Expected one Mean_Sun_Angle ZENITH_ANGLE and AZIMUTH_ANGLE in {mtd_tl}"
+        )
 
-    view_az_els = root.findall(f".//{ns}Mean_Viewing_Incidence_Angle/{ns}AZIMUTH_ANGLE")
-    if not view_az_els:
-        view_az_els = root.findall(".//Mean_Viewing_Incidence_Angle/AZIMUTH_ANGLE")
-    if view_az_els:
-        angles["view_azimuth"] = np.mean([float(e.text) for e in view_az_els])
-    else:
-        angles["view_azimuth"] = 0.0
+    view_zen = _find_all(".//{*}Mean_Viewing_Incidence_Angle/{*}ZENITH_ANGLE")
+    view_az = _find_all(".//{*}Mean_Viewing_Incidence_Angle/{*}AZIMUTH_ANGLE")
+    if not view_zen or len(view_zen) != len(view_az):
+        raise ValueError(
+            f"Missing or incomplete Mean_Viewing_Incidence_Angle entries in {mtd_tl}"
+        )
 
-    return angles
+    return {
+        "solar_zenith": sun_zen[0],
+        "solar_azimuth": sun_az[0],
+        "view_zenith": np.mean(view_zen),
+        "view_azimuth": np.mean(view_az),
+    }
 
 
 def _parse_quantification(xml_path: Path) -> tuple[float, float]:
