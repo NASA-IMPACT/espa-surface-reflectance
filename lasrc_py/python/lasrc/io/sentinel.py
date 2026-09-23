@@ -55,12 +55,7 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
     fill_mask = None
 
     for band_name in SENTINEL_BAND_ORDER:
-        # Find JP2 file
-        jp2_files = list(safe_dir.glob(f"**/*_{band_name}.jp2"))
-        if not jp2_files:
-            raise FileNotFoundError(f"No JP2 file found for {band_name} in {safe_dir}")
-
-        with rasterio.open(jp2_files[0]) as src:
+        with rasterio.open(_find_band_file(safe_dir, band_name)) as src:
             dn = src.read(1).astype(np.float32)
 
             # Get 10m reference dimensions from B02
@@ -130,6 +125,21 @@ def _resample_to_10m(
     resampled = np.repeat(np.repeat(data, scale, axis=0), scale, axis=1)
     # Trim to exact 10m dimensions (handles edge cases)
     return resampled[:nlines_10m, :nsamps_10m]
+
+
+def _find_band_file(safe_dir: Path, band_name: str) -> Path:
+    """Locate the single IMG_DATA JP2 for ``band_name`` inside a SAFE archive.
+
+    QI_DATA holds masks with the same ``*_<band>.jp2`` suffix (e.g.
+    MSK_QUALIT_B01.jp2), so the search is restricted to IMG_DATA.
+    """
+    pattern = f"GRANULE/*/IMG_DATA/*_{band_name}.jp2"
+    matches = sorted(Path(safe_dir).glob(pattern))
+    if not matches:
+        raise FileNotFoundError(f"No {pattern} found in {safe_dir}")
+    if len(matches) > 1:
+        raise ValueError(f"Expected one {pattern} in {safe_dir}, found {len(matches)}")
+    return matches[0]
 
 
 def _find_tile_metadata(safe_dir: Path) -> Path:
