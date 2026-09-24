@@ -25,8 +25,8 @@ SUN = """<Mean_Sun_Angle>
       </Mean_Sun_Angle>"""
 
 VIEW = """<Mean_Viewing_Incidence_Angle bandId="0">
-          <ZENITH_ANGLE unit="deg">3.0</ZENITH_ANGLE>
-          <AZIMUTH_ANGLE unit="deg">210.0</AZIMUTH_ANGLE>
+          <ZENITH_ANGLE unit="deg">3.37889124840365</ZENITH_ANGLE>
+          <AZIMUTH_ANGLE unit="deg">213.175195014188</AZIMUTH_ANGLE>
         </Mean_Viewing_Incidence_Angle>
         <Mean_Viewing_Incidence_Angle bandId="4">
           <ZENITH_ANGLE unit="deg">4.0</ZENITH_ANGLE>
@@ -64,13 +64,18 @@ def test_find_tile_metadata_multiple_raises(tmp_path):
         _find_tile_metadata(safe)
 
 
-def test_parse_angles(tmp_path):
+def test_parse_angles_matches_espa_metadata_chain(tmp_path):
+    # C LaSRC reads angles from the ESPA XML: each value is parsed into a
+    # float, written with "%f", and read back into a float. The view angle is
+    # the first Mean_Viewing_Incidence_Angle only (bandId 0 here), not a mean.
     safe = _make_safe(tmp_path, ["L1C_A"])
     angles = _parse_angles(_find_tile_metadata(safe))
-    assert angles["solar_zenith"] == pytest.approx(66.3360005107259)
-    assert angles["solar_azimuth"] == pytest.approx(163.18021256875)
-    assert angles["view_zenith"] == pytest.approx(3.5)
-    assert angles["view_azimuth"] == pytest.approx(215.0)
+    assert angles == {
+        "solar_zenith": 66.33599853515625,
+        "solar_azimuth": 163.18020629882812,
+        "view_zenith": 3.3788909912109375,
+        "view_azimuth": 213.17520141601562,
+    }
 
 
 @pytest.mark.parametrize(
