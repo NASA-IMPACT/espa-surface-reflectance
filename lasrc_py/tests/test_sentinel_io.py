@@ -2,9 +2,11 @@
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from lasrc.io.sentinel import (
+    _dn_to_toa,
     _find_band_file,
     _find_tile_metadata,
     _parse_angles,
@@ -193,3 +195,12 @@ def test_parse_quantification_missing_value_raises(tmp_path):
 def test_parse_quantification_bad_offsets_raise(tmp_path, band_ids):
     with pytest.raises(ValueError, match="RADIO_ADD_OFFSET"):
         _parse_quantification(_write_mtd(tmp_path, offsets=_offsets(band_ids)))
+
+
+def test_dn_to_toa_matches_c_float_arithmetic():
+    # C LaSRC: toa = (DN + add_offset) * scale_factor in float, where
+    # scale_factor is 1/QUANTIFICATION_VALUE written to the ESPA XML as
+    # "%10.8f". Dividing by 10000 instead differs by 1 ULP for these DNs.
+    toa = _dn_to_toa(np.array([4.0, 8.0], dtype=np.float32), -1000.0, 10000.0)
+    assert toa.dtype == np.float32
+    assert toa.tolist() == [-0.09959999471902847, -0.09919999539852142]

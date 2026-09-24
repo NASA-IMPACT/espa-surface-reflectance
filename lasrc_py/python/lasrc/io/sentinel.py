@@ -90,9 +90,7 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
         else:
             fill_mask |= dn_is_zero
 
-        # Unscale to TOA reflectance
-        # toa = (DN + RADIO_ADD_OFFSET) / QUANTIFICATION_VALUE
-        toa = (dn + radiometric_offset) / quantification_value
+        toa = _dn_to_toa(dn, radiometric_offset, quantification_value)
 
         # Resample to 10m if needed
         if native_res != 10:
@@ -125,6 +123,17 @@ def _resample_to_10m(
     resampled = np.repeat(np.repeat(data, scale, axis=0), scale, axis=1)
     # Trim to exact 10m dimensions (handles edge cases)
     return resampled[:nlines_10m, :nsamps_10m]
+
+
+def _dn_to_toa(dn: np.ndarray, offset: float, quantification_value: float) -> np.ndarray:
+    """Convert L1C DN to TOA reflectance with C LaSRC's float arithmetic.
+
+    C computes (DN + add_offset) * scale_factor in float, with scale_factor =
+    1/QUANTIFICATION_VALUE stored as a float. Multiplying by that scale is not
+    bit-identical to dividing by QUANTIFICATION_VALUE.
+    """
+    scale = np.float32(1.0 / quantification_value)
+    return (dn.astype(np.float32, copy=False) + np.float32(offset)) * scale
 
 
 def _find_band_file(safe_dir: Path, band_name: str) -> Path:
