@@ -7,6 +7,7 @@ import pytest
 
 from lasrc.io.sentinel import (
     _dn_to_toa,
+    _fill_mask,
     _find_band_file,
     _find_tile_metadata,
     _parse_angles,
@@ -204,3 +205,11 @@ def test_dn_to_toa_matches_c_float_arithmetic():
     toa = _dn_to_toa(np.array([4.0, 8.0], dtype=np.float32), -1000.0, 10000.0)
     assert toa.dtype == np.float32
     assert toa.tolist() == [-0.09959999471902847, -0.09919999539852142]
+
+
+def test_fill_mask_matches_c_toa_fill_test():
+    # C LaSRC flags fill on the converted TOA (toaband == 0), so with the
+    # baseline 04.00 offset a valid DN of 1000 (TOA exactly 0) is also fill.
+    dn = np.array([0.0, 999.0, 1000.0, 1001.0], dtype=np.float32)
+    toa = _dn_to_toa(dn, -1000.0, 10000.0)
+    assert _fill_mask(dn, toa).tolist() == [True, False, True, False]
