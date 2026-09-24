@@ -43,7 +43,7 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
     # Parse metadata
     mtd_msil1c = safe_dir / "MTD_MSIL1C.xml"
     angles = _parse_angles(_find_tile_metadata(safe_dir))
-    quantification_value, radiometric_offset = _parse_quantification(mtd_msil1c)
+    quantification_value, radiometric_offsets = _parse_quantification(mtd_msil1c)
 
     # Read bands
     toa_bands = []
@@ -54,7 +54,7 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
     # Track fill mask: DN == 0 for any band marks fill (bit 0 of QA)
     fill_mask = None
 
-    for band_name in SENTINEL_BAND_ORDER:
+    for band_name, radiometric_offset in zip(SENTINEL_BAND_ORDER, radiometric_offsets):
         with rasterio.open(_find_band_file(safe_dir, band_name)) as src:
             dn = src.read(1).astype(np.float32)
 
@@ -91,7 +91,7 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
             fill_mask |= dn_is_zero
 
         # Unscale to TOA reflectance
-        # Since Baseline 4.00: toa = (DN + offset) / quantification_value
+        # toa = (DN + RADIO_ADD_OFFSET) / QUANTIFICATION_VALUE
         toa = (dn + radiometric_offset) / quantification_value
 
         # Resample to 10m if needed
@@ -198,24 +198,32 @@ def _parse_angles(mtd_tl: Path) -> dict:
     }
 
 
-def _parse_quantification(xml_path: Path) -> tuple[float, float]:
-    """Extract quantification value and radiometric offset from MTD_MSIL1C.xml.
+def _parse_quantification(mtd_msil1c: Path) -> tuple[float, list[float]]:
+    """Extract the quantification value and per-band offsets from MTD_MSIL1C.xml.
 
-    Returns (quantification_value, radiometric_offset).
+    Returns (quantification_value, offsets) with offsets ordered as
+    SENTINEL_BAND_ORDER, which matches the RADIO_ADD_OFFSET band_id order.
     """
-    tree = ElementTree.parse(xml_path)
-    root = tree.getroot()
+    root = ElementTree.parse(mtd_msil1c).getroot()
 
-    # Quantification value
-    qv_el = root.find(".//QUANTIFICATION_VALUE")
-    if qv_el is None:
-        qv_el = root.find(".//{*}QUANTIFICATION_VALUE")
-    quantification_value = float(qv_el.text) if qv_el is not None else 10000.0
+    quant = [float(e.text) for e in root.iterfind(".//{*}QUANTIFICATION_VALUE")]
+    if len(quant) != 1:
+        raise ValueError(
+            f"Expected one QUANTIFICATION_VALUE in {mtd_msil1c}, found {len(quant)}"
+        )
 
-    # Radiometric offset (Baseline 4.00+)
-    offset_el = root.find(".//RADIO_ADD_OFFSET")
-    if offset_el is None:
-        offset_el = root.find(".//{*}RADIO_ADD_OFFSET")
-    radiometric_offset = float(offset_el.text) if offset_el is not None else -1000.0
+    offsets: dict[int, float] = {}
+    for e in root.iterfind(".//{*}RADIO_ADD_OFFSET"):
+        band_id = int(e.get("band_id"))
+        if band_id in offsets or not 0 <= band_id < len(SENTINEL_BAND_ORDER):
+            raise ValueError(
+                f"Duplicate or out-of-range RADIO_ADD_OFFSET band_id={band_id} in {mtd_msil1c}"
+            )
+        offsets[band_id] = float(e.text)
+    if len(offsets) != len(SENTINEL_BAND_ORDER):
+        raise ValueError(
+            f"Expected RADIO_ADD_OFFSET for {len(SENTINEL_BAND_ORDER)} bands in "
+            f"{mtd_msil1c}, found {len(offsets)}"
+        )
 
-    return quantification_value, radiometric_offset
+    return quant[0], [offsets[i] for i in range(len(SENTINEL_BAND_ORDER))]
