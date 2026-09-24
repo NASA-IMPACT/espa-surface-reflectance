@@ -1158,13 +1158,16 @@ pub fn compute_sentinel_surface_reflectance(
     };
 
     // ── Step 2: Scene-center geometry (scalar angles) ──
+    // C (lasrc.c, init_sr_refl) holds all of these as float. xfi is
+    // acos(cos(delta az)) in radians; cosxfi is taken before converting xfi
+    // to degrees, and the azimuth difference is a float subtraction.
     let xts = solar_zenith;
     let xtv = view_zenith;
-    let xmus = (xts * DEG2RAD).cos();
-    let xmuv = (xtv * DEG2RAD).cos();
-    let xfi = (view_azimuth - solar_azimuth).abs();
-    let xfi = if xfi > 180.0 { 360.0 - xfi } else { xfi };
-    let cosxfi = (xfi * DEG2RAD).cos();
+    let xmus = (xts * DEG2RAD).cos() as f32 as f64;
+    let xmuv = (xtv * DEG2RAD).cos() as f32 as f64;
+    let xfi_rad = (((solar_azimuth as f32 - view_azimuth as f32) as f64 * DEG2RAD).cos().acos()) as f32;
+    let cosxfi = (xfi_rad as f64).cos() as f32 as f64;
+    let xfi = (xfi_rad as f64 * RAD2DEG) as f32 as f64;
 
     // ── Step 3: Scene-center atmospheric state ──
     // Use rounded nearest-neighbor CMG lookup matching C's init_sr_refl
@@ -1473,8 +1476,9 @@ pub fn compute_sentinel_surface_reflectance(
             let denom_fit = xa * xe - xb * xd;
             let coefa = (xc * xe - xb * xf_val) / denom_fit;
             let coefb = (xa * xf_val - xc * xd) / denom_fit;
-            let epsmin = -coefb / (2.0 * coefa);
-            let resepsmin = xa * epsmin * epsmin + xb * epsmin + xc;
+            // C: float epsmin, resepsmin (xa..xf, coefa/b are double)
+            let epsmin = (-coefb / (2.0 * coefa)) as f32 as f64;
+            let resepsmin = (xa * epsmin * epsmin + xb * epsmin + xc) as f32 as f64;
 
             let eps = if epsmin < LOW_EPS || epsmin > HIGH_EPS {
                 if residual1 < residual3 { eps1 } else { eps3 }
@@ -1495,22 +1499,23 @@ pub fn compute_sentinel_surface_reflectance(
 
             let mut result_taero = raot as f32;
             let mut result_teps = eps as f32;
-            let corf = raot / xmus;
+            // C: float corf = raot / xmus, with both operands float
+            let corf = (raot as f32 / xmus as f32) as f64;
 
             // === Post-retrieval validation ===
             let mut result_ipflag: u8 = 0;
             if residual < (0.015 + 0.005 * corf + 0.10 * troatm[DNS_BAND12]) {
-                // Average TOA in NxN window for B8A
-                let mut rotoa_b8a = 0.0f64;
+                // Average TOA in NxN window for B8A (C: float rotoa, no fill test)
+                let mut rotoa_b8a = 0.0f32;
                 let mut pc = 0u32;
                 for iline in win_i..ew_line {
                     for isamp in win_j..ew_samp {
-                        if isamp >= nsamps { continue; }
-                        rotoa_b8a += toa_bands[DNS_BAND8A][(iline, isamp)] as f64;
+                        rotoa_b8a += toa_bands[DNS_BAND8A][(iline, isamp)];
                         pc += 1;
                     }
                 }
-                if pc > 0 { rotoa_b8a /= pc as f64; }
+                rotoa_b8a /= pc as f32;
+                let rotoa_b8a = rotoa_b8a as f64;
 
                 let ros5 = atmcorlamb2_new(
                     &atm_coeff[DNS_BAND8A], tgo_arr[DNS_BAND8A], DNS_BAND8A,
@@ -1518,17 +1523,17 @@ pub fn compute_sentinel_surface_reflectance(
                     rotoa_b8a, lambda, eps,
                 );
 
-                // Average TOA in NxN window for B04
-                let mut rotoa_b4 = 0.0f64;
+                // Average TOA in NxN window for B04 (C: float rotoa, no fill test)
+                let mut rotoa_b4 = 0.0f32;
                 pc = 0;
                 for iline in win_i..ew_line {
                     for isamp in win_j..ew_samp {
-                        if isamp >= nsamps { continue; }
-                        rotoa_b4 += toa_bands[DNS_BAND4][(iline, isamp)] as f64;
+                        rotoa_b4 += toa_bands[DNS_BAND4][(iline, isamp)];
                         pc += 1;
                     }
                 }
-                if pc > 0 { rotoa_b4 /= pc as f64; }
+                rotoa_b4 /= pc as f32;
+                let rotoa_b4 = rotoa_b4 as f64;
 
                 let ros4 = atmcorlamb2_new(
                     &atm_coeff[DNS_BAND4], tgo_arr[DNS_BAND4], DNS_BAND4,
@@ -1594,7 +1599,7 @@ pub fn compute_sentinel_surface_reflectance(
                 );
                 result_teps = WATER_EPS as f32;
                 result_taero = water_result.raot as f32;
-                let water_corf = water_result.raot / xmus;
+                let water_corf = (water_result.raot as f32 / xmus as f32) as f64;
 
                 // Validate: check band 1 reflectance
                 let ros1 = atmcorlamb2_new(
