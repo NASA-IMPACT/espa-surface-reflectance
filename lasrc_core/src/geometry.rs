@@ -16,11 +16,68 @@ pub struct SpaceDef {
 
 /// Convert a UTM image (line, sample) position to WGS84 latitude/longitude.
 ///
-/// Returns `(lat_deg, lon_deg)`.
+/// Returns `(lat_deg, lon_deg)`, each exactly representable as `f32`.
 ///
-/// Algorithm ported directly from `utmtodeg.c` using WGS84 ellipsoid parameters.
+/// Line-by-line port of C `utmtodeg()`, which is not GCTP. Most intermediates
+/// there are `float`, so each statement below rounds to `f32` where C assigns
+/// to a float and evaluates in `f64` where C promotes (a double operand or a
+/// math.h call). Keeping those roundings makes the output bit-identical to C;
+/// the window lat/long feeds the CMG bilinear weights, where a 1 ULP change
+/// can flip aerosol window validity.
 pub fn utm_to_deg(space_def: &SpaceDef, line: i32, samp: i32) -> (f64, f64) {
-    utm_to_deg_f(space_def, line as f64, samp as f64)
+    const SA: f64 = 6378137.0;
+    const INV_FLATTENING: f64 = 298.257223563;
+    const FALSE_EASTING: f64 = 500000.0;
+    const FALSE_NORTHING: f64 = 10000000.0;
+    const C_RAD2DEG: f64 = 180.0 / std::f64::consts::PI;
+    let scale_fact: f32 = 0.9996;
+
+    let sb = (SA - SA / INV_FLATTENING) as f32;
+    let e2 = ((SA.powf(2.0) - (sb as f64).powf(2.0)).sqrt() / sb as f64) as f32;
+    let e2cuadrada = (e2 as f64).powf(2.0) as f32;
+    let c = (SA.powf(2.0) / sb as f64) as f32;
+
+    let mut x = (space_def.ul_corner_x + samp as f64 * space_def.pixel_size[0]) as f32;
+    let mut y = (space_def.ul_corner_y - line as f64 * space_def.pixel_size[1]) as f32;
+    x = (x as f64 - FALSE_EASTING) as f32;
+    if space_def.zone < 0 {
+        y = (y as f64 - FALSE_NORTHING) as f32;
+    }
+    let central_meridian = (space_def.zone.abs() as f64 * 6.0 - 183.0) as f32;
+
+    let lat0 = (y as f64 / (6366197.724 * scale_fact as f64)) as f32;
+    let cos_lat = (lat0 as f64).cos();
+    let sqr_cos_lat = cos_lat.powf(2.0);
+
+    let v = ((c as f64 / (1.0 + e2cuadrada as f64 * sqr_cos_lat).sqrt()) * scale_fact as f64) as f32;
+    let a = x / v;
+    let a1 = (2.0 * lat0 as f64).sin() as f32;
+    let a2 = (a1 as f64 * sqr_cos_lat) as f32;
+    let j2 = (lat0 as f64 + a1 as f64 / 2.0) as f32;
+    let j4 = ((3.0 * j2 as f64 + a2 as f64) / 4.0) as f32;
+    let j6 = ((5.0 * j4 as f64 + a2 as f64 * sqr_cos_lat) / 3.0) as f32;
+    let alpha = ((3.0 / 4.0) * e2cuadrada as f64) as f32;
+    let beta = ((5.0 / 3.0) * (alpha as f64).powf(2.0)) as f32;
+    let gama = ((35.0 / 27.0) * (alpha as f64).powf(3.0)) as f32;
+    // All-float expression in C, so evaluated in f32
+    let bm = scale_fact * c * (lat0 - alpha * j2 + beta * j4 - gama * j6);
+    let b = (y - bm) / v;
+    let epsi = (e2cuadrada as f64 * (a as f64).powf(2.0) / 2.0 * sqr_cos_lat) as f32;
+    let eps = (a as f64 * (1.0 - epsi as f64 / 3.0)) as f32;
+    let nab = (b as f64 * (1.0 - epsi as f64) + lat0 as f64) as f32;
+    let senoheps = (((eps as f64).exp() - (-eps as f64).exp()) / 2.0) as f32;
+    let delta = (senoheps as f64 / (nab as f64).cos()).atan() as f32;
+    let ta0 = ((delta as f64).cos() * (nab as f64).tan()).atan() as f32;
+
+    let lon = (delta as f64 * C_RAD2DEG + central_meridian as f64) as f32;
+    let dlat = (ta0 - lat0) as f64;
+    let lat = ((lat0 as f64
+        + (1.0 + e2cuadrada as f64 * sqr_cos_lat
+            - 1.5 * e2cuadrada as f64 * (lat0 as f64).sin() * cos_lat * dlat)
+            * dlat)
+        * C_RAD2DEG) as f32;
+
+    (lat as f64, lon as f64)
 }
 
 /// Convert fractional UTM image (line, sample) to WGS84 latitude/longitude using
@@ -112,67 +169,6 @@ pub fn utm_to_deg_gctp(space_def: &SpaceDef, line: f64, samp: f64) -> (f64, f64)
     (lat.to_degrees(), lon.to_degrees())
 }
 
-/// Like [`utm_to_deg`] but for fractional image coordinates.
-pub fn utm_to_deg_f(space_def: &SpaceDef, line: f64, samp: f64) -> (f64, f64) {
-    // WGS84 ellipsoid constants
-    let sa: f64 = 6378137.0;
-    let inv_flattening: f64 = 298.257223563;
-    let false_easting: f64 = 500_000.0;
-    let false_northing: f64 = 10_000_000.0;
-    let scale_fact: f64 = 0.9996;
-
-    // Derived ellipsoid quantities
-    let sb = sa - (sa / inv_flattening);
-    let e2 = ((sa * sa - sb * sb).sqrt()) / sb;
-    let e2sq = e2 * e2;
-    let c = (sa * sa) / sb;
-
-    // Projection coordinates for the given line/sample
-    let mut x = space_def.ul_corner_x + (samp * space_def.pixel_size[0]);
-    let mut y = space_def.ul_corner_y - (line * space_def.pixel_size[1]);
-
-    x -= false_easting;
-    if space_def.zone < 0 {
-        y -= false_northing;
-    }
-
-    let zone = space_def.zone.abs();
-    let central_meridian = (zone as f64) * 6.0 - 183.0;
-
-    // Initial latitude estimate from northing
-    let mut lat = y / (6_366_197.724 * scale_fact);
-    let cos_lat = lat.cos();
-    let sqr_cos_lat = cos_lat * cos_lat;
-
-    // Intermediate variables
-    let v = (c / (1.0 + e2sq * sqr_cos_lat).sqrt()) * scale_fact;
-    let a = x / v;
-    let a1 = (2.0 * lat).sin();
-    let a2 = a1 * sqr_cos_lat;
-    let j2 = lat + a1 / 2.0;
-    let j4 = (3.0 * j2 + a2) / 4.0;
-    let j6 = (5.0 * j4 + a2 * sqr_cos_lat) / 3.0;
-    let alpha = 0.75 * e2sq;
-    let beta = (5.0 / 3.0) * alpha * alpha;
-    let gama = (35.0 / 27.0) * alpha * alpha * alpha;
-    let bm = scale_fact * c * (lat - alpha * j2 + beta * j4 - gama * j6);
-    let b = (y - bm) / v;
-    let epsi = e2sq * a * a / 2.0 * sqr_cos_lat;
-    let eps = a * (1.0 - epsi / 3.0);
-    let nab = b * (1.0 - epsi) + lat;
-    let senoheps = (eps.exp() - (-eps).exp()) / 2.0;
-    let delta = (senoheps / nab.cos()).atan();
-    let ta0 = (delta.cos() * nab.tan()).atan();
-
-    let lon = delta * RAD2DEG + central_meridian;
-    lat = (lat
-        + (1.0 + e2sq * sqr_cos_lat - 1.5 * e2sq * lat.sin() * cos_lat * (ta0 - lat))
-            * (ta0 - lat))
-        * RAD2DEG;
-
-    (lat, lon)
-}
-
 /// Compute the scattering angle in degrees.
 ///
 /// - `xmus`: cosine of solar zenith angle
@@ -213,6 +209,31 @@ mod tests {
         let (lat, lon) = utm_to_deg_gctp(&space_def, 786.5, 1480.5);
         assert!((lat - 52.552_032_861_723).abs() < 1e-11, "lat={lat}");
         assert!((lon - -104.100_323_871_297).abs() < 1e-11, "lon={lon}");
+    }
+
+    #[test]
+    fn test_utm_to_deg_matches_c_utmtodeg_bits() {
+        // Reference: C LaSRC utmtodeg() float outputs dumped at aerosol
+        // windows of S2A_MSIL1C_20250115T170641_N0511_R069_T14SPA_20250115T190719
+        // (zone 14N, UL 600000, 3600000, 10 m).
+        let space_def = SpaceDef {
+            ul_corner_x: 600_000.0,
+            ul_corner_y: 3_600_000.0,
+            pixel_size: [10.0, 10.0],
+            zone: 14,
+        };
+        for (line, samp, lat_bits, lon_bits) in [
+            (114, 7536, 0x4202_0d87u32, 0xc2c2_4429u32),
+            (5958, 9240, 0x41ff_de3f, 0xc2c1_ed5f),
+            (36, 7836, 0x4202_143e, 0xc2c2_33be),
+        ] {
+            let (lat, lon) = utm_to_deg(&space_def, line, samp);
+            assert_eq!(
+                ((lat as f32).to_bits(), (lon as f32).to_bits()),
+                (lat_bits, lon_bits),
+                "line={line} samp={samp}"
+            );
+        }
     }
 
     #[test]
