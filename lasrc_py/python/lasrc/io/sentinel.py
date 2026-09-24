@@ -154,15 +154,27 @@ def _find_tile_metadata(safe_dir: Path) -> Path:
     return matches[0]
 
 
-def _parse_angles(mtd_tl: Path) -> dict:
-    """Extract scene-center mean sun and view angles from a granule MTD_TL.xml.
+def _espa_angle(text: str) -> float:
+    """Round an angle the way C LaSRC receives it through the ESPA XML.
 
-    View angles are averaged across all bands listed in the metadata.
+    espa-product-formatter parses the value into a float, writes it with
+    "%f", and LaSRC reads it back into a float. Each parse is atof (to
+    double) then assignment to float, hence float() before np.float32().
+    """
+    return float(np.float32(float(f"{float(np.float32(float(text))):f}")))
+
+
+def _parse_angles(mtd_tl: Path) -> dict:
+    """Extract scene-center sun and view angles from a granule MTD_TL.xml.
+
+    Matches the C LaSRC input chain: the view angle is the first
+    Mean_Viewing_Incidence_Angle entry (espa-product-formatter ignores the
+    rest), and every angle carries ESPA's float/"%f" rounding.
     """
     root = ElementTree.parse(mtd_tl).getroot()
 
     def _find_all(path: str) -> list[float]:
-        return [float(e.text) for e in root.iterfind(path)]
+        return [_espa_angle(e.text) for e in root.iterfind(path)]
 
     sun_zen = _find_all(".//{*}Mean_Sun_Angle/{*}ZENITH_ANGLE")
     sun_az = _find_all(".//{*}Mean_Sun_Angle/{*}AZIMUTH_ANGLE")
@@ -181,8 +193,8 @@ def _parse_angles(mtd_tl: Path) -> dict:
     return {
         "solar_zenith": sun_zen[0],
         "solar_azimuth": sun_az[0],
-        "view_zenith": np.mean(view_zen),
-        "view_azimuth": np.mean(view_az),
+        "view_zenith": view_zen[0],
+        "view_azimuth": view_az[0],
     }
 
 
