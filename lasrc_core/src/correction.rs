@@ -1200,8 +1200,11 @@ pub fn compute_sentinel_surface_reflectance(
     let roatm_ia_max: Vec<f64> = atm_coeff.iter().map(|c| c.roatm_upper).collect();
 
     // ── Step 5: Allocate working arrays ──
-    let mut taero = vec![DEFAULT_AERO as f32; npix];
-    let mut teps = vec![DEFAULT_EPS as f32; npix];
+    // C callocs taero/teps. Pixels no window writes (fill, and windows whose UL
+    // pixel is fill) keep 0, and aerosol_interp_sentinel reads them as
+    // neighbors near fill edges.
+    let mut taero = vec![0.0f32; npix];
+    let mut teps = vec![0.0f32; npix];
     let mut ipflag = vec![0u8; npix];
 
     let bi = sensor.band_indices();
