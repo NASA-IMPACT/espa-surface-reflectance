@@ -19,6 +19,16 @@ dependencies = [
 python-source = "python"
 features = ["pyo3/extension-module"]
 
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "ruff>=0.16.8",
+]
+
 [project.scripts]
 lasrc-landsat = "lasrc.cli:landsat"
 lasrc-sentinel = "lasrc.cli:sentinel"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

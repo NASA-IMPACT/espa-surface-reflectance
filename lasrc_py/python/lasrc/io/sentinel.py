@@ -42,9 +42,8 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
 
     # Parse metadata
     mtd_msil1c = safe_dir / "MTD_MSIL1C.xml"
-    mtd_tl = safe_dir / "MTD_TL.xml"
-    angles = _parse_angles(mtd_tl if mtd_tl.exists() else mtd_msil1c)
-    quantification_value, radiometric_offset = _parse_quantification(mtd_msil1c)
+    angles = _parse_angles(_find_tile_metadata(safe_dir))
+    quantification_value, radiometric_offsets = _parse_quantification(mtd_msil1c)
 
     # Read bands
     toa_bands = []
@@ -52,16 +51,11 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
     nsamps_10m = None
     profile = {}
 
-    # Track fill mask: DN == 0 for any band marks fill (bit 0 of QA)
+    # Fill in any band (see _fill_mask) marks the pixel as fill (bit 0 of QA)
     fill_mask = None
 
-    for band_name in SENTINEL_BAND_ORDER:
-        # Find JP2 file
-        jp2_files = list(safe_dir.glob(f"**/*_{band_name}.jp2"))
-        if not jp2_files:
-            raise FileNotFoundError(f"No JP2 file found for {band_name} in {safe_dir}")
-
-        with rasterio.open(jp2_files[0]) as src:
+    for band_name, radiometric_offset in zip(SENTINEL_BAND_ORDER, radiometric_offsets):
+        with rasterio.open(_find_band_file(safe_dir, band_name)) as src:
             dn = src.read(1).astype(np.float32)
 
             # Get 10m reference dimensions from B02
@@ -80,25 +74,21 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
                     "nsamps": nsamps_10m,
                 }
 
-        # Detect fill at native resolution before resampling
-        dn_is_zero = dn == 0.0
+        toa = _dn_to_toa(dn, radiometric_offset, quantification_value)
 
-        # Resample fill mask to 10m if needed
+        # Detect fill at native resolution before resampling
+        band_fill = _fill_mask(dn, toa)
         native_res = BAND_RESOLUTION[band_name]
         if native_res != 10:
-            dn_is_zero = _resample_to_10m(
-                dn_is_zero.astype(np.float32), native_res, nlines_10m, nsamps_10m
+            band_fill = _resample_to_10m(
+                band_fill.astype(np.float32), native_res, nlines_10m, nsamps_10m
             ) > 0.5
 
-        # Accumulate fill mask (any band with DN==0 → fill)
+        # A pixel is fill if any band is fill
         if fill_mask is None:
-            fill_mask = dn_is_zero
+            fill_mask = band_fill
         else:
-            fill_mask |= dn_is_zero
-
-        # Unscale to TOA reflectance
-        # Since Baseline 4.00: toa = (DN + offset) / quantification_value
-        toa = (dn + radiometric_offset) / quantification_value
+            fill_mask |= band_fill
 
         # Resample to 10m if needed
         if native_res != 10:
@@ -133,73 +123,124 @@ def _resample_to_10m(
     return resampled[:nlines_10m, :nsamps_10m]
 
 
-def _parse_angles(xml_path: Path) -> dict:
-    """Extract scene-center mean angles from MTD_TL.xml or MTD_MSIL1C.xml."""
-    tree = ElementTree.parse(xml_path)
-    root = tree.getroot()
+def _dn_to_toa(dn: np.ndarray, offset: float, quantification_value: float) -> np.ndarray:
+    """Convert L1C DN to TOA reflectance with C LaSRC's float arithmetic.
 
-    # Remove namespace prefix for easier searching
-    ns = ""
-    if root.tag.startswith("{"):
-        ns = root.tag.split("}")[0] + "}"
-
-    angles = {}
-
-    # Sun angles
-    sun_el = root.find(f".//{ns}Mean_Sun_Angle/{ns}ZENITH_ANGLE")
-    if sun_el is None:
-        sun_el = root.find(".//Mean_Sun_Angle/ZENITH_ANGLE")
-    if sun_el is not None:
-        angles["solar_zenith"] = float(sun_el.text)
-    else:
-        angles["solar_zenith"] = 30.0  # fallback
-
-    sun_az = root.find(f".//{ns}Mean_Sun_Angle/{ns}AZIMUTH_ANGLE")
-    if sun_az is None:
-        sun_az = root.find(".//Mean_Sun_Angle/AZIMUTH_ANGLE")
-    if sun_az is not None:
-        angles["solar_azimuth"] = float(sun_az.text)
-    else:
-        angles["solar_azimuth"] = 150.0
-
-    # View angles — average across all bands
-    view_zen_els = root.findall(f".//{ns}Mean_Viewing_Incidence_Angle/{ns}ZENITH_ANGLE")
-    if not view_zen_els:
-        view_zen_els = root.findall(".//Mean_Viewing_Incidence_Angle/ZENITH_ANGLE")
-    if view_zen_els:
-        angles["view_zenith"] = np.mean([float(e.text) for e in view_zen_els])
-    else:
-        angles["view_zenith"] = 0.0
-
-    view_az_els = root.findall(f".//{ns}Mean_Viewing_Incidence_Angle/{ns}AZIMUTH_ANGLE")
-    if not view_az_els:
-        view_az_els = root.findall(".//Mean_Viewing_Incidence_Angle/AZIMUTH_ANGLE")
-    if view_az_els:
-        angles["view_azimuth"] = np.mean([float(e.text) for e in view_az_els])
-    else:
-        angles["view_azimuth"] = 0.0
-
-    return angles
-
-
-def _parse_quantification(xml_path: Path) -> tuple[float, float]:
-    """Extract quantification value and radiometric offset from MTD_MSIL1C.xml.
-
-    Returns (quantification_value, radiometric_offset).
+    C computes (DN + add_offset) * scale_factor in float, with scale_factor =
+    1/QUANTIFICATION_VALUE stored as a float. Multiplying by that scale is not
+    bit-identical to dividing by QUANTIFICATION_VALUE.
     """
-    tree = ElementTree.parse(xml_path)
-    root = tree.getroot()
+    scale = np.float32(1.0 / quantification_value)
+    return (dn.astype(np.float32, copy=False) + np.float32(offset)) * scale
 
-    # Quantification value
-    qv_el = root.find(".//QUANTIFICATION_VALUE")
-    if qv_el is None:
-        qv_el = root.find(".//{*}QUANTIFICATION_VALUE")
-    quantification_value = float(qv_el.text) if qv_el is not None else 10000.0
 
-    # Radiometric offset (Baseline 4.00+)
-    offset_el = root.find(".//RADIO_ADD_OFFSET")
-    if offset_el is None:
-        offset_el = root.find(".//{*}RADIO_ADD_OFFSET")
-    radiometric_offset = float(offset_el.text) if offset_el is not None else -1000.0
+def _fill_mask(dn: np.ndarray, toa: np.ndarray) -> np.ndarray:
+    """Per-band fill mask, reproducing C LaSRC's test on the converted TOA.
 
-    return quantification_value, radiometric_offset
+    C flags fill where toaband == 0 after applying RADIO_ADD_OFFSET, so a valid
+    DN equal to -offset (TOA exactly 0) is also treated as fill. This is a C bug
+    kept for parity; see docs/rust-perf-notes.md.
+    """
+    return (dn == 0) | (toa == 0)
+
+
+def _find_band_file(safe_dir: Path, band_name: str) -> Path:
+    """Locate the single IMG_DATA JP2 for ``band_name`` inside a SAFE archive.
+
+    QI_DATA holds masks with the same ``*_<band>.jp2`` suffix (e.g.
+    MSK_QUALIT_B01.jp2), so the search is restricted to IMG_DATA.
+    """
+    pattern = f"GRANULE/*/IMG_DATA/*_{band_name}.jp2"
+    matches = sorted(Path(safe_dir).glob(pattern))
+    if not matches:
+        raise FileNotFoundError(f"No {pattern} found in {safe_dir}")
+    if len(matches) > 1:
+        raise ValueError(f"Expected one {pattern} in {safe_dir}, found {len(matches)}")
+    return matches[0]
+
+
+def _find_tile_metadata(safe_dir: Path) -> Path:
+    """Locate the single granule-level MTD_TL.xml inside a SAFE archive."""
+    matches = sorted(Path(safe_dir).glob("GRANULE/*/MTD_TL.xml"))
+    if not matches:
+        raise FileNotFoundError(f"No GRANULE/*/MTD_TL.xml found in {safe_dir}")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Expected one GRANULE/*/MTD_TL.xml in {safe_dir}, found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _espa_angle(text: str) -> float:
+    """Round an angle the way C LaSRC receives it through the ESPA XML.
+
+    espa-product-formatter parses the value into a float, writes it with
+    "%f", and LaSRC reads it back into a float. Each parse is atof (to
+    double) then assignment to float, hence float() before np.float32().
+    """
+    return float(np.float32(float(f"{float(np.float32(float(text))):f}")))
+
+
+def _parse_angles(mtd_tl: Path) -> dict:
+    """Extract scene-center sun and view angles from a granule MTD_TL.xml.
+
+    Matches the C LaSRC input chain: the view angle is the first
+    Mean_Viewing_Incidence_Angle entry (espa-product-formatter ignores the
+    rest), and every angle carries ESPA's float/"%f" rounding.
+    """
+    root = ElementTree.parse(mtd_tl).getroot()
+
+    def _find_all(path: str) -> list[float]:
+        return [_espa_angle(e.text) for e in root.iterfind(path)]
+
+    sun_zen = _find_all(".//{*}Mean_Sun_Angle/{*}ZENITH_ANGLE")
+    sun_az = _find_all(".//{*}Mean_Sun_Angle/{*}AZIMUTH_ANGLE")
+    if len(sun_zen) != 1 or len(sun_az) != 1:
+        raise ValueError(
+            f"Expected one Mean_Sun_Angle ZENITH_ANGLE and AZIMUTH_ANGLE in {mtd_tl}"
+        )
+
+    view_zen = _find_all(".//{*}Mean_Viewing_Incidence_Angle/{*}ZENITH_ANGLE")
+    view_az = _find_all(".//{*}Mean_Viewing_Incidence_Angle/{*}AZIMUTH_ANGLE")
+    if not view_zen or len(view_zen) != len(view_az):
+        raise ValueError(
+            f"Missing or incomplete Mean_Viewing_Incidence_Angle entries in {mtd_tl}"
+        )
+
+    return {
+        "solar_zenith": sun_zen[0],
+        "solar_azimuth": sun_az[0],
+        "view_zenith": view_zen[0],
+        "view_azimuth": view_az[0],
+    }
+
+
+def _parse_quantification(mtd_msil1c: Path) -> tuple[float, list[float]]:
+    """Extract the quantification value and per-band offsets from MTD_MSIL1C.xml.
+
+    Returns (quantification_value, offsets) with offsets ordered as
+    SENTINEL_BAND_ORDER, which matches the RADIO_ADD_OFFSET band_id order.
+    """
+    root = ElementTree.parse(mtd_msil1c).getroot()
+
+    quant = [float(e.text) for e in root.iterfind(".//{*}QUANTIFICATION_VALUE")]
+    if len(quant) != 1:
+        raise ValueError(
+            f"Expected one QUANTIFICATION_VALUE in {mtd_msil1c}, found {len(quant)}"
+        )
+
+    offsets: dict[int, float] = {}
+    for e in root.iterfind(".//{*}RADIO_ADD_OFFSET"):
+        band_id = int(e.get("band_id"))
+        if band_id in offsets or not 0 <= band_id < len(SENTINEL_BAND_ORDER):
+            raise ValueError(
+                f"Duplicate or out-of-range RADIO_ADD_OFFSET band_id={band_id} in {mtd_msil1c}"
+            )
+        offsets[band_id] = float(e.text)
+    if len(offsets) != len(SENTINEL_BAND_ORDER):
+        raise ValueError(
+            f"Expected RADIO_ADD_OFFSET for {len(SENTINEL_BAND_ORDER)} bands in "
+            f"{mtd_msil1c}, found {len(offsets)}"
+        )
+
+    return quant[0], [offsets[i] for i in range(len(SENTINEL_BAND_ORDER))]
