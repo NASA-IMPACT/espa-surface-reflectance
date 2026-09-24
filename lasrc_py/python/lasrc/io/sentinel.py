@@ -51,7 +51,7 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
     nsamps_10m = None
     profile = {}
 
-    # Track fill mask: DN == 0 for any band marks fill (bit 0 of QA)
+    # Fill in any band (see _fill_mask) marks the pixel as fill (bit 0 of QA)
     fill_mask = None
 
     for band_name, radiometric_offset in zip(SENTINEL_BAND_ORDER, radiometric_offsets):
@@ -74,23 +74,21 @@ def read_sentinel_safe(safe_dir: str | Path) -> dict:
                     "nsamps": nsamps_10m,
                 }
 
-        # Detect fill at native resolution before resampling
-        dn_is_zero = dn == 0.0
+        toa = _dn_to_toa(dn, radiometric_offset, quantification_value)
 
-        # Resample fill mask to 10m if needed
+        # Detect fill at native resolution before resampling
+        band_fill = _fill_mask(dn, toa)
         native_res = BAND_RESOLUTION[band_name]
         if native_res != 10:
-            dn_is_zero = _resample_to_10m(
-                dn_is_zero.astype(np.float32), native_res, nlines_10m, nsamps_10m
+            band_fill = _resample_to_10m(
+                band_fill.astype(np.float32), native_res, nlines_10m, nsamps_10m
             ) > 0.5
 
-        # Accumulate fill mask (any band with DN==0 → fill)
+        # A pixel is fill if any band is fill
         if fill_mask is None:
-            fill_mask = dn_is_zero
+            fill_mask = band_fill
         else:
-            fill_mask |= dn_is_zero
-
-        toa = _dn_to_toa(dn, radiometric_offset, quantification_value)
+            fill_mask |= band_fill
 
         # Resample to 10m if needed
         if native_res != 10:
@@ -134,6 +132,16 @@ def _dn_to_toa(dn: np.ndarray, offset: float, quantification_value: float) -> np
     """
     scale = np.float32(1.0 / quantification_value)
     return (dn.astype(np.float32, copy=False) + np.float32(offset)) * scale
+
+
+def _fill_mask(dn: np.ndarray, toa: np.ndarray) -> np.ndarray:
+    """Per-band fill mask, reproducing C LaSRC's test on the converted TOA.
+
+    C flags fill where toaband == 0 after applying RADIO_ADD_OFFSET, so a valid
+    DN equal to -offset (TOA exactly 0) is also treated as fill. This is a C bug
+    kept for parity; see docs/rust-perf-notes.md.
+    """
+    return (dn == 0) | (toa == 0)
 
 
 def _find_band_file(safe_dir: Path, band_name: str) -> Path:
