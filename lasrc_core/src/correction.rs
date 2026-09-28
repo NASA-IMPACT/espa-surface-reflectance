@@ -1215,14 +1215,15 @@ pub fn compute_sentinel_surface_reflectance(
 
     // ── Step 6: Climatological per-pixel atmospheric correction ──
     // Simplified first-pass SR using scene-center atmospheric params at
-    // fixed AOT=0.05. Sentinel does NOT divide TOA by cos(SZA). Only a few
-    // bands are ever read (B8A/B12 at window centers, B01 for the aerosol
-    // QA), so values are computed on demand by `clim_sr` from these
-    // per-band (tgo*roatm, tgo*ttatmg, satm) terms.
+    // fixed AOT=0.05. Sentinel does NOT divide TOA by cos(SZA).
     let tauray = sensor.tauray();
     let max_band_idx = lambda.len() - 1;
 
+    // PERF: Only a few bands are ever read (B8A/B12 at window centers, B01
+    // for the aerosol QA), so values are computed on demand by `clim_sr`
+    // from these per-band (tgo*roatm, tgo*ttatmg, satm) terms.
     let mut clim_coef = vec![[0.0f32; 3]; nbands];
+
     for iband in 0..nbands {
         // C calls atmcorlamb2 with raot=0.05, eps=-1.0 for each band.
         // eps=-1.0 means NO wavelength scaling (mraot550nm = raot directly).
