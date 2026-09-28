@@ -171,14 +171,19 @@ def _find_tile_metadata(safe_dir: Path) -> Path:
     return matches[0]
 
 
+def _c_float(x: float) -> float:
+    """Round a double to C float precision, as assigning to a float does."""
+    return float(np.float32(x))
+
+
 def _espa_angle(text: str) -> float:
     """Round an angle the way C LaSRC receives it through the ESPA XML.
 
-    espa-product-formatter parses the value into a float, writes it with
-    "%f", and LaSRC reads it back into a float. Each parse is atof (to
-    double) then assignment to float, hence float() before np.float32().
+    espa-product-formatter parses the value into a float and writes it with
+    "%f"; LaSRC parses that text back into a float.
     """
-    return float(np.float32(float(f"{float(np.float32(float(text))):f}")))
+    angle = _c_float(float(text))  # atof, stored in a float
+    return _c_float(float(f"{angle:f}"))  # printf("%f"), atof, stored in a float
 
 
 def _parse_angles(mtd_tl: Path) -> dict:
