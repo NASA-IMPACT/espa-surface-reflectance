@@ -695,7 +695,6 @@ pub fn aero_avg_failed_sentinel(
     // Pass 1: Average from non-fill, non-failed neighbors. Each pixel reads
     // only the unmodified ipflag/taero/teps and writes only its own outputs,
     // so rows are independent (C runs this loop under OpenMP).
-    let (ipflag_ro, taero_ro, teps_ro) = (&*ipflag, &*taero, &*teps);
     let nbpixnf_per_row: Vec<usize> = taeros
         .par_chunks_mut(nsamps)
         .zip(tepss.par_chunks_mut(nsamps))
@@ -727,12 +726,12 @@ pub fn aero_avg_failed_sentinel(
 
                         let curr_win_pix = wl as usize * nsamps + ws as usize;
                         // Include non-fill, non-failed pixels
-                        if ipflag_ro[curr_win_pix] & (1u8 << IPFLAG_FILL) == 0
-                            && ipflag_ro[curr_win_pix] & (1u8 << IPFLAG_FAILED) == 0
+                        if ipflag[curr_win_pix] & (1u8 << IPFLAG_FILL) == 0
+                            && ipflag[curr_win_pix] & (1u8 << IPFLAG_FAILED) == 0
                         {
                             nbaeroavg += 1;
-                            taerosum += taero_ro[curr_win_pix];
-                            tepssum += teps_ro[curr_win_pix];
+                            taerosum += taero[curr_win_pix];
+                            tepssum += teps[curr_win_pix];
                         }
                     }
                 }
