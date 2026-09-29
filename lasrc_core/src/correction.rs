@@ -3,8 +3,6 @@
 //!
 //! Ported from the C LaSRC main processing loop.
 
-use std::borrow::Cow;
-
 use ndarray::{Array2, ArrayView2};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
@@ -1126,6 +1124,10 @@ pub fn compute_surface_reflectance(
 /// - Sentinel-specific eps optimization with resepsmin validation
 /// - B09: atmospheric bypass; B10: copy TOA directly
 /// - Sentinel-specific post-processing functions
+///
+/// # Panics
+///
+/// If `qa_band` is not in standard (C-contiguous) layout.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_sentinel_surface_reflectance(
     sensor: &dyn Sensor,
@@ -1152,10 +1154,9 @@ pub fn compute_sentinel_surface_reflectance(
 
     // ── Step 1: Fill detection from input QA band ──
     // Bit 0 = fill (set by reader based on DN==0 for any band)
-    let qaband: Cow<[u16]> = match qa_band.as_slice() {
-        Some(s) => Cow::Borrowed(s),
-        None => Cow::Owned(qa_band.iter().copied().collect()),
-    };
+    let qaband: &[u16] = qa_band
+        .as_slice()
+        .expect("qa_band must be in standard (C-contiguous) layout");
 
     // ── Step 2: Scene-center geometry (scalar angles) ──
     // C (lasrc.c, init_sr_refl) holds all of these as float. xfi is
