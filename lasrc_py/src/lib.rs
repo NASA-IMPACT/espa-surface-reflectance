@@ -287,6 +287,12 @@ fn process_sentinel_surface_reflectance<'py>(
         ))),
     };
 
+    if qa_band.as_slice().is_err() {
+        return Err(PyValueError::new_err(
+            "qa_band must be a C-contiguous array (use numpy.ascontiguousarray)",
+        ));
+    }
+
     let toa_views: Vec<_> = toa_bands.iter().map(|a| a.as_array()).collect();
 
     let space_def = SpaceDef {
