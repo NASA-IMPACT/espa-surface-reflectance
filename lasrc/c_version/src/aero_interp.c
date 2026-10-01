@@ -483,9 +483,50 @@ int fix_invalid_aerosols_landsat
     /** Second pass, require at least 1 valid surrounding value **/
     if (nbpixnf > 0)
     {
+        fill_with_local_average_landsat (FORWARD, 1, false, ipflag, smflag,
+            taero, teps, aero_window, half_aero_window, nlines, nsamps,
+            &nbpixnf, &nbpixtot);
+		/*
         fill_with_local_average_landsat (FORWARD, 1, true, ipflag, smflag,
             taero, teps, aero_window, half_aero_window, nlines, nsamps,
             &nbpixnf, &nbpixtot);
+		*/
+        printf ("Second pass: %d pixels were not filled out of a total %d "
+            "pixels\n", nbpixnf, nbpixtot);
+    }
+
+    /** Final reverse pass for any remaining invalid retrievals (mostly the
+        UL part of the image) **/
+    if (nbpixnf > 0)
+    {
+        fill_with_local_average_landsat(REVERSE, 1, false, ipflag, smflag,
+            taero, teps, aero_window, half_aero_window, nlines, nsamps,
+            &nbpixnf, &nbpixtot);
+		/*
+        fill_with_local_average_landsat(REVERSE, 1, true, ipflag, smflag,
+            taero, teps, aero_window, half_aero_window, nlines, nsamps,
+            &nbpixnf, &nbpixtot);
+		*/
+        printf ("Final pass: %d pixels were not filled out of a total %d "
+            "pixels\n", nbpixnf, nbpixtot);
+    }
+
+    /* Free the allocated memory */
+    free (smflag);
+
+    /* Successful completion */
+    return (SUCCESS);
+}
+
+
+/******************************************************************************
+MODULE:  aerosol_interp_sentinel
+
+PURPOSE:  Interpolates the Sentinel aerosol values throughout the image using
+the aerosols that were calculated for the UL pixel of each NxN window. Also
+cleans up the fill pixels in the ipflag.
+
+RETURN VALUE:
         printf ("Second pass: %d pixels were not filled out of a total %d "
             "pixels\n", nbpixnf, nbpixtot);
     }

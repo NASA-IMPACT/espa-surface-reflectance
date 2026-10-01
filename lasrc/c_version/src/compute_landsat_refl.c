@@ -17,7 +17,7 @@ NOTES:
 #include "poly_coeff.h"
 #include "read_level1_qa.h"
 #include "read_level2_qa.h"
-//#define WRITE_TAERO 1
+#define WRITE_TAERO 1		//uncomment by JJU. 2026-10-01.
 
 /******************************************************************************
 MODULE:  compute_landsat_toa_refl
