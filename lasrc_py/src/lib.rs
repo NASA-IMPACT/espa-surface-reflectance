@@ -141,7 +141,6 @@ impl PyAuxiliaryData {
 ///     Pixel size in meters (e.g. 30.0 for Landsat).
 /// utm_zone : int
 ///     UTM zone number; negative for southern hemisphere.
-/// use_orig_aero : bool
 /// scene_solar_zenith : float, optional
 ///     Scene solar zenith from the product metadata (90 - SUN_ELEVATION), used
 ///     for the scene-center atmospheric coefficients like C LaSRC. Defaults to
@@ -155,7 +154,7 @@ impl PyAuxiliaryData {
 ///   "aerosol"   – 1-D int16 array (flattened)
 ///   "qa"        – 1-D uint8 array (flattened)
 #[pyfunction]
-#[pyo3(signature = (sensor_name, toa_bands, bt_bands, solar_zenith, solar_azimuth, view_zenith, view_azimuth, qa_band, lut, aux, ul_corner_x, ul_corner_y, pixel_size_x, pixel_size_y, utm_zone, use_orig_aero, num_threads=None, scene_solar_zenith=None))]
+#[pyo3(signature = (sensor_name, toa_bands, bt_bands, solar_zenith, solar_azimuth, view_zenith, view_azimuth, qa_band, lut, aux, ul_corner_x, ul_corner_y, pixel_size_x, pixel_size_y, utm_zone, num_threads=None, scene_solar_zenith=None))]
 #[allow(clippy::too_many_arguments)]
 fn process_surface_reflectance<'py>(
     py: Python<'py>,
@@ -174,7 +173,6 @@ fn process_surface_reflectance<'py>(
     pixel_size_x: f64,
     pixel_size_y: f64,
     utm_zone: i32,
-    use_orig_aero: bool,
     num_threads: Option<usize>,
     scene_solar_zenith: Option<f32>,
 ) -> PyResult<PyObject> {
@@ -215,7 +213,6 @@ fn process_surface_reflectance<'py>(
         &aux.inner,
         &space_def,
         scene_solar_zenith,
-        use_orig_aero,
         num_threads,
     );
 

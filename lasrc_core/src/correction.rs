@@ -461,8 +461,8 @@ fn precompute_coefficients(
 /// `scene_solar_zenith` is the scene solar zenith from the product metadata
 /// (90 - MTL SUN_ELEVATION), which C uses for the scene-center coefficients. When
 /// `None`, the center pixel of `solar_zenith` is used instead. The per-pixel
-/// azimuth and view zenith grids are only needed by the original aerosol
-/// algorithm (`use_orig_aero`), which is not implemented.
+/// azimuth and view zenith grids are only needed by C's original aerosol
+/// algorithm (its `use_orig_aero` option), which is not ported.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_surface_reflectance(
     sensor: &dyn Sensor,
@@ -477,7 +477,6 @@ pub fn compute_surface_reflectance(
     aux: &AuxiliaryData,
     space_def: &SpaceDef,
     scene_solar_zenith: Option<f32>,
-    _use_orig_aero: bool,
     num_threads: Option<usize>,
 ) -> SurfaceReflectanceResult {
     let pool = ThreadPoolBuilder::new()
