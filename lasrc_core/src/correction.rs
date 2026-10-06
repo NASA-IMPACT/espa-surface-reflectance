@@ -463,6 +463,10 @@ fn precompute_coefficients(
 /// `None`, the center pixel of `solar_zenith` is used instead. The per-pixel
 /// azimuth and view zenith grids are only needed by C's original aerosol
 /// algorithm (its `use_orig_aero` option), which is not ported.
+///
+/// # Panics
+///
+/// If `qa_band` is not in standard (C-contiguous) layout.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_surface_reflectance(
     sensor: &dyn Sensor,
@@ -546,8 +550,9 @@ pub fn compute_surface_reflectance(
     let mut teps = vec![DEFAULT_EPS as f32; npix];
     let mut ipflag = vec![0u8; npix];
 
-    // Flatten QA band for 1D access
-    let qa_flat: Vec<u16> = qa_band.iter().copied().collect();
+    let qa_flat: &[u16] = qa_band
+        .as_slice()
+        .expect("qa_band must be in standard (C-contiguous) layout");
 
     let bi = sensor.band_indices();
     let iband1 = bi.red; // reference band for aerosol retrieval
@@ -642,7 +647,7 @@ pub fn compute_surface_reflectance(
             // bit is kept unless the water retest overwrites the flags.
             let center_is_fill = is_fill_pixel(qa_flat[pix]);
             let (iline, isamp) = if center_is_fill {
-                match find_closest_non_fill(&qa_flat, nlines, nsamps, iline, isamp, half_aero_window) {
+                match find_closest_non_fill(qa_flat, nlines, nsamps, iline, isamp, half_aero_window) {
                     Some(loc) => loc,
                     None => {
                         return AerosolWindowResult {
@@ -947,7 +952,7 @@ pub fn compute_surface_reflectance(
     aerosol_interp(
         &mut taero,
         &mut ipflag,
-        &qa_flat,
+        qa_flat,
         nlines,
         nsamps,
         aero_window,
@@ -956,7 +961,7 @@ pub fn compute_surface_reflectance(
     aerosol_interp(
         &mut teps,
         &mut ipflag,
-        &qa_flat,
+        qa_flat,
         nlines,
         nsamps,
         aero_window,

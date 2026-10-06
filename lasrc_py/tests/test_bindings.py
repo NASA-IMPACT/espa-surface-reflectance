@@ -41,3 +41,19 @@ def test_sentinel_rejects_non_contiguous_qa_band():
             ul_corner_x=0.0, ul_corner_y=0.0, pixel_size_x=10.0, pixel_size_y=10.0,
             utm_zone=14,
         )
+
+
+def test_landsat_rejects_non_contiguous_qa_band():
+    toa_bands = [np.zeros((4, 4), dtype=np.float32) for _ in range(8)]
+    angle = np.zeros((4, 4), dtype=np.float32)
+    qa_band = np.zeros((4, 8), dtype=np.uint16)[:, ::2]
+    assert not qa_band.flags.c_contiguous
+
+    with pytest.raises(ValueError, match="qa_band"):
+        lasrc.process_surface_reflectance(
+            sensor_name="LANDSAT_8", toa_bands=toa_bands, bt_bands=[],
+            solar_zenith=angle, solar_azimuth=angle, view_zenith=angle, view_azimuth=angle,
+            qa_band=qa_band, lut=_placeholder_lut(), aux=_placeholder_aux(),
+            ul_corner_x=0.0, ul_corner_y=0.0, pixel_size_x=30.0, pixel_size_y=30.0,
+            utm_zone=14,
+        )
