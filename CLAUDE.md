@@ -2,17 +2,20 @@
 
 ## Python Environment
 
+Use the `.venv` in the repository root, managed with `uv`. Create it if it doesn't exist:
+```bash
+uv venv .venv --python 3.12
+```
+
 **Always activate the venv before running any Python command:**
 ```bash
-source /Users/seanharkins/projects/espa-surface-reflectance/.venv/bin/activate
+source .venv/bin/activate
 ```
 
 Use `uv` for all package management. Never use `pip`, `conda`, or bare `pip install`.
 ```bash
 uv pip install <package>
 ```
-
-The venv is at `.venv` and was created with `uv venv .venv --python 3.12`.
 
 ## Build
 
