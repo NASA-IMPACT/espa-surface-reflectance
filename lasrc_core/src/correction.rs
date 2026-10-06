@@ -567,49 +567,32 @@ pub fn compute_surface_reflectance(
     // roslamb = (sband[ib][i] - tgo*roatm) / (tgo*ttatmg + satm*(sband[ib][i] - tgo*roatm))
     // where sband[ib][i] is TOA/cos(sza).
     //
-    // This MUST be computed before the aerosol retrieval because the
-    // retrieval uses climatological SR bands 5 (NIR) and 7 (SWIR2) for NDWI.
-    // C: float **sband — use f32 to match
-    // Pre-pass: mark fill pixels in ipflag before parallel SR loop
+    // The aerosol retrieval reads it for NIR and SWIR2 (NDWI) at window
+    // centers and the final correction reads it once per band and pixel, so
+    // `clim_sr` computes it on demand rather than holding every band at full
+    // resolution. C: float **sband, so it is evaluated in f32.
+    let clim_coef: Vec<[f32; 3]> = (0..nbands)
+        .map(|iband| {
+            [
+                btgo[iband] as f32 * broatm[iband] as f32,
+                btgo[iband] as f32 * bttatmg[iband] as f32,
+                bsatm[iband] as f32,
+            ]
+        })
+        .collect();
+    let clim_sr = |iband: usize, iline: usize, isamp: usize, xmus: f32| -> f32 {
+        let [tgo_x_roatm, tgo_x_ttatmg, satm] = clim_coef[iband];
+        let rotoa = (toa_bands[iband][(iline, isamp)] / xmus)
+            .clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32);
+        let num = rotoa - tgo_x_roatm;
+        (num / (tgo_x_ttatmg + satm * num)).clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32)
+    };
+
     for pix in 0..npix {
         if is_fill_pixel(qa_flat[pix]) {
             ipflag[pix] = 1u8 << IPFLAG_FILL;
         }
     }
-
-    let sband: Vec<Vec<f32>> = (0..nbands)
-        .map(|_| vec![0.0f32; npix])
-        .collect();
-
-    pool.install(|| {
-        (0..nlines).into_par_iter().for_each(|iline| {
-            for isamp in 0..nsamps {
-                let pix = iline * nsamps + isamp;
-                if is_fill_pixel(qa_flat[pix]) { continue; }
-
-                let xmus = cos_zenith_f32(solar_zenith[(iline, isamp)]);
-
-                for iband in 0..nbands {
-                    let rotoa = (toa_bands[iband][(iline, isamp)] / xmus)
-                        .clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32);
-
-                    let tgo_x_roatm = btgo[iband] as f32 * broatm[iband] as f32;
-                    let tgo_x_ttatmg = btgo[iband] as f32 * bttatmg[iband] as f32;
-                    let roslamb: f32 = {
-                        let num = rotoa - tgo_x_roatm;
-                        num / (tgo_x_ttatmg + bsatm[iband] as f32 * num)
-                    };
-
-                    // SAFETY: Each iline is processed by exactly one thread.
-                    // pix = iline * nsamps + isamp is unique per (iline, isamp).
-                    unsafe {
-                        let ptr = sband[iband].as_ptr() as *mut f32;
-                        *ptr.add(pix) = roslamb.clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32);
-                    }
-                }
-            }
-        });
-    });
 
     // ── Step 5: Aerosol retrieval at window centers ──
     // Precompute the quadratic fit constants for eps optimization.
@@ -661,7 +644,6 @@ pub fn compute_surface_reflectance(
             } else {
                 (iline, isamp)
             };
-            let spix = iline * nsamps + isamp;
 
             // Get TOA reflectance at this pixel for the needed bands,
             // divided by cos(solar zenith) to match C code's TOA normalization.
@@ -751,8 +733,8 @@ pub fn compute_surface_reflectance(
             let intrb7 = bilerp_f32(int_b7, &cmg.w) as f64;
 
             // Compute NDWI from climatological SR bands 5 (NIR) and 7 (SWIR2)
-            let sr_nir = sband[bi.nir][spix] as f64;
-            let sr_swir2 = sband[bi.swir2][spix] as f64;
+            let sr_nir = clim_sr(bi.nir, iline, isamp, xmus_pixel) as f64;
+            let sr_swir2 = clim_sr(bi.swir2, iline, isamp, xmus_pixel) as f64;
             let sr_swir2_half = sr_swir2 * 0.5;
             let denom = sr_nir + sr_swir2_half;
             // C: float xndwi -- the ratio is computed in double but stored as float
@@ -995,13 +977,13 @@ pub fn compute_surface_reflectance(
 
                 let raot = taero[pix] as f64;
                 let eps = teps[pix] as f64;
+                let xmus = cos_zenith_f32(solar_zenith[(iline, isamp)]);
 
                 for iband in 0..nbands {
                     let roslamb = if iband == SRL_BAND9 {
                         // Cirrus band: not atmospherically corrected, just
                         // TOA reflectance normalized by cos(SZA). Matches
                         // C's SRL_BAND9 handling in lasrc.c.
-                        let xmus = cos_zenith_f32(solar_zenith[(iline, isamp)]);
                         (toa_bands[iband][(iline, isamp)] / xmus)
                             .clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32) as f64
                     } else {
@@ -1010,7 +992,7 @@ pub fn compute_surface_reflectance(
                         //             + broatm[ib]) * btgo[ib];
                         // rsurf, bttatmg, bsatm, broatm and btgo are float, so the
                         // two products are float; only the `1.0 -` promotes to double.
-                        let rsurf = sband[iband][pix]; // f32
+                        let rsurf = clim_sr(iband, iline, isamp, xmus);
                         let num = rsurf * bttatmg[iband] as f32;
                         let den = 1.0 - (bsatm[iband] as f32 * rsurf) as f64;
                         let rotoa: f32 =
@@ -1046,7 +1028,7 @@ pub fn compute_surface_reflectance(
                     // Matches C code compute_landsat_refl.c lines 1758-1780.
                     if iband == bi.coastal {
                         // C: float tmpf = fabs(rsurf - roslamb); both operands float
-                        let rsurf = sband[bi.coastal][pix];
+                        let rsurf = clim_sr(bi.coastal, iline, isamp, xmus);
                         let tmpf = (rsurf - roslamb as f32).abs() as f64;
                         let bits = if tmpf <= LOW_AERO_THRESH {
                             1u8 << AERO1_QA
