@@ -588,11 +588,13 @@ pub fn compute_surface_reflectance(
         (num / (tgo_x_ttatmg + satm * num)).clamp(MIN_VALID_REFL as f32, MAX_VALID_REFL as f32)
     };
 
-    for pix in 0..npix {
-        if is_fill_pixel(qa_flat[pix]) {
-            ipflag[pix] = 1u8 << IPFLAG_FILL;
-        }
-    }
+    pool.install(|| {
+        ipflag.par_iter_mut().zip(qa_flat.par_iter()).for_each(|(flag, &qa)| {
+            if is_fill_pixel(qa) {
+                *flag = 1u8 << IPFLAG_FILL;
+            }
+        });
+    });
 
     // ── Step 5: Aerosol retrieval at window centers ──
     // Precompute the quadratic fit constants for eps optimization.
@@ -1036,41 +1038,44 @@ pub fn compute_surface_reflectance(
         .collect();
 
     // Scale brightness temperature bands
-    let bt_out: Vec<Array2<u16>> = bt_bands
-        .iter()
-        .map(|bt| {
-            let arr: Array2<u16> = Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
-                let val = bt[(i, j)] as f64;
-                if val < MIN_VALID_TH || val > MAX_VALID_TH {
-                    SR_FILL_VALUE
-                } else {
-                    ((val - BAND_OFFSET_TH) * MULT_FACTOR_TH)
-                        .round()
-                        .clamp(0.0, u16::MAX as f64) as u16
-                }
-            });
-            arr
-        })
-        .collect();
+    let bt_out: Vec<Array2<u16>> = pool.install(|| {
+        bt_bands
+            .iter()
+            .map(|bt| {
+                let mut out = vec![SR_FILL_VALUE; npix];
+                out.par_chunks_mut(nsamps).enumerate().for_each(|(iline, row)| {
+                    for (isamp, o) in row.iter_mut().enumerate() {
+                        let val = bt[(iline, isamp)] as f64;
+                        if (MIN_VALID_TH..=MAX_VALID_TH).contains(&val) {
+                            *o = ((val - BAND_OFFSET_TH) * MULT_FACTOR_TH)
+                                .round()
+                                .clamp(0.0, u16::MAX as f64) as u16;
+                        }
+                    }
+                });
+                Array2::from_shape_vec((nlines, nsamps), out).expect("band size matches scene")
+            })
+            .collect()
+    });
 
     // Scale aerosol to int16 (valid range [0, 5000], fill = -9999)
     // C uses float arithmetic: tmpf = (aero[pix] + 0.0f) * 1000.0f; roundf(tmpf)
     let aero_mult_f32 = MULT_FACTOR_AERO as f32;
-    let aerosol = Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
-        let pix = i * nsamps + j;
-        if is_fill_pixel(qa_flat[pix]) {
-            AERO_FILL
-        } else {
-            let tmpf = taero[pix] * aero_mult_f32;
-            tmpf.round().clamp(0.0, 5000.0) as i16
-        }
+    let mut aerosol_out = vec![AERO_FILL; npix];
+    pool.install(|| {
+        aerosol_out
+            .par_iter_mut()
+            .zip(taero.par_iter().zip(qa_flat.par_iter()))
+            .for_each(|(o, (&aero, &qa))| {
+                if !is_fill_pixel(qa) {
+                    *o = (aero * aero_mult_f32).round().clamp(0.0, 5000.0) as i16;
+                }
+            });
     });
+    let aerosol = Array2::from_shape_vec((nlines, nsamps), aerosol_out)
+        .expect("aerosol size matches scene");
 
-    // Build QA output
-    let qa = Array2::from_shape_fn((nlines, nsamps), |(i, j)| {
-        let pix = i * nsamps + j;
-        ipflag[pix]
-    });
+    let qa = Array2::from_shape_vec((nlines, nsamps), ipflag).expect("ipflag size matches scene");
 
     SurfaceReflectanceResult {
         sr_bands,
