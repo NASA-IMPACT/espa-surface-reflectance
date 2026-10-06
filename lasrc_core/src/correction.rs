@@ -931,24 +931,10 @@ pub fn compute_surface_reflectance(
     );
 
     // Interpolate taero, then teps (matching C: two separate calls)
-    aerosol_interp(
-        &mut taero,
-        &mut ipflag,
-        qa_flat,
-        nlines,
-        nsamps,
-        aero_window,
-        half_aero_window,
-    );
-    aerosol_interp(
-        &mut teps,
-        &mut ipflag,
-        qa_flat,
-        nlines,
-        nsamps,
-        aero_window,
-        half_aero_window,
-    );
+    pool.install(|| {
+        aerosol_interp(&mut taero, &mut ipflag, qa_flat, nlines, nsamps, aero_window, half_aero_window);
+        aerosol_interp(&mut teps, &mut ipflag, qa_flat, nlines, nsamps, aero_window, half_aero_window);
+    });
 
     // ── Step 7: Final per-pixel atmospheric correction ──
     // For each pixel, reconstruct TOA from climatological SR, then apply
