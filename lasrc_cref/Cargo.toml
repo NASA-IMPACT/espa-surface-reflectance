@@ -1,0 +1,30 @@
+# Differential test harness: original C LaSRC leaf functions vs the lasrc_core
+# Rust port. Standalone workspace (empty [workspace] table) so building this
+# crate never touches the production lasrc_py / lasrc-rs workspace or its
+# Cargo.lock. Build/run from this directory.
+[package]
+name = "lasrc_cref"
+version = "0.1.0"
+edition = "2021"
+description = "Differential test harness: C LaSRC reference vs lasrc_core Rust port"
+publish = false
+
+# Detach from the parent workspace so the main build/lock is unaffected.
+[workspace]
+
+[dependencies]
+lasrc_core = { path = "../lasrc_core" }
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+proptest = "1"
+
+[features]
+default = []
+# Enables the C leaf functions that depend on ESPA/HDF headers
+# (poly_coeff, atmcorlamb2_new, subaeroret_new). Requires a conda/pixi env that
+# provides espa-product-formatter + hdf (see pixi.toml); point $PREFIX (or
+# $CREF_PREFIX) at the activated env. Stage 0 (quick_select) needs neither.
+lut = []

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e68e2522d5826bd9fd358c87c52c81bdac908f1ac61314023f153f2fc8c065ab # shrinks to i = Inputs { tgo: 0.6208282, roatm_upper: 0.31012565, roatm_coef: [0.0, 0.013185547, -0.048869886, 0.55684644], ttatmg_coef: [0.0, 0.0, 0.0, 0.92327744], satm_coef: [0.0, 0.0, 0.0, 0.0], raot550nm: 0.31181508, iband: 0, normext: 1.8647105, rotoa: 0.33880734, eps: 1.7962514 }
