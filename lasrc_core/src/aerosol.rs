@@ -268,6 +268,101 @@ pub fn subaeroret_new(
     }
 }
 
+/// Window center and interpolation neighbor along one axis for
+/// `aerosol_interp`, computed as in C `aerosol_interp_landsat`.
+struct InterpAxis {
+    /// C: center_line / center_samp
+    center: usize,
+    /// C: center_line1 / center_samp1
+    neighbor: usize,
+    /// C: u / v (float), the fractional distance to `center`
+    frac: f32,
+}
+
+impl InterpAxis {
+    fn new(i: usize, n: usize, aero_window: usize, half_aero_window: usize) -> Self {
+        let aero_step: f64 = 1.0 / aero_window as f64;
+        // C: center = (int)(i * aero_step) * aero_window + half_aero_window
+        let center = ((i as f64 * aero_step) as isize) as usize * aero_window + half_aero_window;
+        // C: float yaero, xaero
+        let pos = ((i as f64 - center as f64) * aero_step) as f32;
+        let frac = pos - (pos as i32) as f32; // C: yaero - (int)yaero
+        let neighbor = if frac < 0.0 {
+            if center >= aero_window {
+                center - aero_window
+            } else {
+                center
+            }
+        } else {
+            let c1 = center + aero_window;
+            if c1 >= n.saturating_sub(1) {
+                center
+            } else {
+                c1
+            }
+        };
+        Self { center, neighbor, frac: frac.abs() }
+    }
+}
+
+/// Read-only state for one `aerosol_interp` pass. `data` and `ipflag` are the
+/// values from before the pass.
+struct InterpPass<'a> {
+    data: &'a [f32],
+    ipflag: &'a [u8],
+    qa_band: &'a [u16],
+    lines: Vec<InterpAxis>,
+    samps: Vec<InterpAxis>,
+    nsamps: usize,
+}
+
+impl InterpPass<'_> {
+    /// New (value, ipflag) the C serial scan writes at (line, samp), or `None`
+    /// for fill and window-center pixels, which it leaves unchanged.
+    fn pixel(&self, line: usize, samp: usize) -> Option<(f32, u8)> {
+        let nsamps = self.nsamps;
+        let pix = line * nsamps + samp;
+        if is_fill_pixel(self.qa_band[pix]) {
+            return None;
+        }
+        let (ly, sx) = (&self.lines[line], &self.samps[samp]);
+        if samp == sx.center && line == ly.center {
+            return None;
+        }
+
+        // Every corner is a window center, which the scan never writes, except
+        // when `center_samp == nsamps` in the last column: like C, the flat
+        // index then runs into column 0 of the next line. The scan has already
+        // overwritten that pixel if it comes earlier, so recompute it.
+        let read = |l: usize, s: usize| -> (f32, u8) {
+            let t = l * nsamps + s;
+            if s >= nsamps && t < pix {
+                if let Some(v) = self.pixel(t / nsamps, t % nsamps) {
+                    return v;
+                }
+            }
+            (self.data[t], self.ipflag[t])
+        };
+        let (a11, f11) = read(ly.center, sx.center);
+        let (a12, f12) = read(ly.center, sx.neighbor);
+        let (a21, f21) = read(ly.neighbor, sx.center);
+        let (a22, f22) = read(ly.neighbor, sx.neighbor);
+
+        // Bilinear interpolation in f32 (C: float arithmetic on float arrays)
+        let (u, v) = (ly.frac, sx.frac);
+        let value = a11 + u * (a21 - a11) + v * (a12 - a11) + u * v * (a11 - a12 - a21 + a22);
+
+        // Clear everything, set INTERP_WINDOW, and mark water if any corner
+        // center was water
+        let water_bit = 1u8 << IPFLAG_WATER;
+        let mut flag = 1u8 << IPFLAG_INTERP_WINDOW;
+        if (f11 | f12 | f21 | f22) & water_bit != 0 {
+            flag |= water_bit;
+        }
+        Some((value, flag))
+    }
+}
+
 /// Bilinear interpolation of a per-pixel array from window-center values.
 ///
 /// Ported from `aerosol_interp_landsat()` in C LaSRC code (`aero_interp.c`).
@@ -279,6 +374,8 @@ pub fn subaeroret_new(
 /// `IPFLAG_INTERP_WINDOW` (clearing all other bits), with `IPFLAG_WATER` OR'd
 /// in if any surrounding center was water.  Fill pixels are cleaned up at the
 /// end to have only `IPFLAG_FILL`.
+///
+/// Lines run in parallel and give the same result as C's serial scan.
 pub fn aerosol_interp(
     data: &mut [f32],
     ipflag: &mut [u8],
@@ -288,107 +385,31 @@ pub fn aerosol_interp(
     aero_window: usize,
     half_aero_window: usize,
 ) {
-    let aero_step: f64 = 1.0 / aero_window as f64;
-    let water_bit = 1u8 << IPFLAG_WATER;
+    let src_data = data.to_vec();
+    let src_ipflag = ipflag.to_vec();
+    let pass = InterpPass {
+        data: &src_data,
+        ipflag: &src_ipflag,
+        qa_band,
+        lines: (0..nlines).map(|i| InterpAxis::new(i, nlines, aero_window, half_aero_window)).collect(),
+        samps: (0..nsamps).map(|i| InterpAxis::new(i, nsamps, aero_window, half_aero_window)).collect(),
+        nsamps,
+    };
 
-    for line in 0..nlines {
-        // C: center_line = (int)(line * aero_step) * aero_window + half_aero_window
-        let center_line = ((line as f64 * aero_step) as isize) as usize * aero_window
-            + half_aero_window;
-
-        // Fractional distance and neighbor line
-        // C: float yaero, xaero — use f32 to match
-        let yaero = ((line as f64 - center_line as f64) * aero_step) as f32;
-        let u_signed = yaero - (yaero as i32) as f32; // C: yaero - (int)yaero
-        let center_line1 = if u_signed < 0.0 {
-            if center_line >= aero_window {
-                center_line - aero_window
-            } else {
-                center_line
-            }
-        } else {
-            let cl1 = center_line + aero_window;
-            if cl1 >= nlines.saturating_sub(1) {
-                center_line
-            } else {
-                cl1
-            }
-        };
-        let u: f32 = u_signed.abs();
-
-        for samp in 0..nsamps {
-            let pix = line * nsamps + samp;
-
-            // Skip fill pixels
-            if is_fill_pixel(qa_band[pix]) {
-                continue;
-            }
-
-            // C: center_samp = (int)(samp * aero_step) * aero_window + half_aero_window
-            let center_samp = ((samp as f64 * aero_step) as isize) as usize * aero_window
-                + half_aero_window;
-
-            // Skip center pixels — they already have their values
-            if samp == center_samp && line == center_line {
-                continue;
-            }
-
-            // Fractional distance and neighbor sample (C: float xaero)
-            let xaero = ((samp as f64 - center_samp as f64) * aero_step) as f32;
-            let v_signed = xaero - (xaero as i32) as f32;
-            let center_samp1 = if v_signed < 0.0 {
-                if center_samp >= aero_window {
-                    center_samp - aero_window
-                } else {
-                    center_samp
+    data.par_chunks_mut(nsamps)
+        .zip(ipflag.par_chunks_mut(nsamps))
+        .enumerate()
+        .for_each(|(line, (data_row, ipflag_row))| {
+            for samp in 0..nsamps {
+                if let Some((value, flag)) = pass.pixel(line, samp) {
+                    data_row[samp] = value;
+                    ipflag_row[samp] = flag;
+                } else if is_fill_pixel(qa_band[line * nsamps + samp]) {
+                    // Fill pixels only keep IPFLAG_FILL
+                    ipflag_row[samp] = 1u8 << IPFLAG_FILL;
                 }
-            } else {
-                let cs1 = center_samp + aero_window;
-                if cs1 >= nsamps.saturating_sub(1) {
-                    center_samp
-                } else {
-                    cs1
-                }
-            };
-            let v: f32 = v_signed.abs();
-
-            // Four corner center pixels
-            let pix11 = center_line * nsamps + center_samp;
-            let pix12 = center_line * nsamps + center_samp1;
-            let pix21 = center_line1 * nsamps + center_samp;
-            let pix22 = center_line1 * nsamps + center_samp1;
-
-            // Bilinear interpolation in f32 (C: float arithmetic on float arrays)
-            let a11 = data[pix11];
-            let a12 = data[pix12];
-            let a21 = data[pix21];
-            let a22 = data[pix22];
-            data[pix] = a11
-                + u * (a21 - a11)
-                + v * (a12 - a11)
-                + u * v * (a11 - a12 - a21 + a22);
-
-            // Set ipflag: clear everything, set INTERP_WINDOW
-            ipflag[pix] = 1u8 << IPFLAG_INTERP_WINDOW;
-
-            // If any corner center was water, mark this pixel as water too
-            if (ipflag[pix11] & water_bit != 0)
-                || (ipflag[pix12] & water_bit != 0)
-                || (ipflag[pix21] & water_bit != 0)
-                || (ipflag[pix22] & water_bit != 0)
-            {
-                ipflag[pix] |= water_bit;
             }
-        }
-    }
-
-    // Clean up fill pixels: ensure they only have IPFLAG_FILL
-    let npix = nlines * nsamps;
-    for pix in 0..npix {
-        if is_fill_pixel(qa_band[pix]) {
-            ipflag[pix] = 1u8 << IPFLAG_FILL;
-        }
-    }
+        });
 }
 
 /// Three-pass local averaging to fix pixels with invalid aerosol retrievals.
@@ -858,6 +879,188 @@ mod tests {
         assert!(result.raot >= 0.01, "AOT should be >= 0.01: {}", result.raot);
         assert!(result.raot <= 5.0, "AOT should be <= 5.0: {}", result.raot);
         assert!(result.residual >= 0.0);
+    }
+
+    /// C `aerosol_interp_landsat` serial scan, as reference for the parallel
+    /// `aerosol_interp`.
+    fn aerosol_interp_serial(
+        data: &mut [f32],
+        ipflag: &mut [u8],
+        qa_band: &[u16],
+        nlines: usize,
+        nsamps: usize,
+        aero_window: usize,
+        half_aero_window: usize,
+    ) {
+        let aero_step: f64 = 1.0 / aero_window as f64;
+        let water_bit = 1u8 << IPFLAG_WATER;
+
+        for line in 0..nlines {
+            // C: center_line = (int)(line * aero_step) * aero_window + half_aero_window
+            let center_line = ((line as f64 * aero_step) as isize) as usize * aero_window
+                + half_aero_window;
+
+            // Fractional distance and neighbor line
+            // C: float yaero, xaero — use f32 to match
+            let yaero = ((line as f64 - center_line as f64) * aero_step) as f32;
+            let u_signed = yaero - (yaero as i32) as f32; // C: yaero - (int)yaero
+            let center_line1 = if u_signed < 0.0 {
+                if center_line >= aero_window {
+                    center_line - aero_window
+                } else {
+                    center_line
+                }
+            } else {
+                let cl1 = center_line + aero_window;
+                if cl1 >= nlines.saturating_sub(1) {
+                    center_line
+                } else {
+                    cl1
+                }
+            };
+            let u: f32 = u_signed.abs();
+
+            for samp in 0..nsamps {
+                let pix = line * nsamps + samp;
+
+                // Skip fill pixels
+                if is_fill_pixel(qa_band[pix]) {
+                    continue;
+                }
+
+                // C: center_samp = (int)(samp * aero_step) * aero_window + half_aero_window
+                let center_samp = ((samp as f64 * aero_step) as isize) as usize * aero_window
+                    + half_aero_window;
+
+                // Skip center pixels — they already have their values
+                if samp == center_samp && line == center_line {
+                    continue;
+                }
+
+                // Fractional distance and neighbor sample (C: float xaero)
+                let xaero = ((samp as f64 - center_samp as f64) * aero_step) as f32;
+                let v_signed = xaero - (xaero as i32) as f32;
+                let center_samp1 = if v_signed < 0.0 {
+                    if center_samp >= aero_window {
+                        center_samp - aero_window
+                    } else {
+                        center_samp
+                    }
+                } else {
+                    let cs1 = center_samp + aero_window;
+                    if cs1 >= nsamps.saturating_sub(1) {
+                        center_samp
+                    } else {
+                        cs1
+                    }
+                };
+                let v: f32 = v_signed.abs();
+
+                // Four corner center pixels
+                let pix11 = center_line * nsamps + center_samp;
+                let pix12 = center_line * nsamps + center_samp1;
+                let pix21 = center_line1 * nsamps + center_samp;
+                let pix22 = center_line1 * nsamps + center_samp1;
+
+                // Bilinear interpolation in f32 (C: float arithmetic on float arrays)
+                let a11 = data[pix11];
+                let a12 = data[pix12];
+                let a21 = data[pix21];
+                let a22 = data[pix22];
+                data[pix] = a11
+                    + u * (a21 - a11)
+                    + v * (a12 - a11)
+                    + u * v * (a11 - a12 - a21 + a22);
+
+                // Set ipflag: clear everything, set INTERP_WINDOW
+                ipflag[pix] = 1u8 << IPFLAG_INTERP_WINDOW;
+
+                // If any corner center was water, mark this pixel as water too
+                if (ipflag[pix11] & water_bit != 0)
+                    || (ipflag[pix12] & water_bit != 0)
+                    || (ipflag[pix21] & water_bit != 0)
+                    || (ipflag[pix22] & water_bit != 0)
+                {
+                    ipflag[pix] |= water_bit;
+                }
+            }
+        }
+
+        // Clean up fill pixels: ensure they only have IPFLAG_FILL
+        let npix = nlines * nsamps;
+        for pix in 0..npix {
+            if is_fill_pixel(qa_band[pix]) {
+                ipflag[pix] = 1u8 << IPFLAG_FILL;
+            }
+        }
+    }
+
+    /// Small deterministic PRNG (xorshift64) so tests need no extra crates.
+    struct XorShift(u64);
+
+    impl XorShift {
+        fn next_f32(&mut self) -> f32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 40) as f32 / (1u64 << 24) as f32
+        }
+    }
+
+    #[test]
+    fn test_aerosol_interp_matches_serial_scan() {
+        let mut rng = XorShift(0x9e3779b97f4a7c15);
+        // nsamps % 3 == 1 exercises the last-column read into the next line.
+        // The scan reads past the end unless the last line is fill when
+        // nlines % 3 == 1, or the last column of the last two lines is fill
+        // when nlines % 3 == 2 and nsamps % 3 == 1.
+        for &(nlines, nsamps) in &[(31, 37), (30, 36), (32, 38), (34, 40), (32, 37), (7, 4), (12, 10)] {
+            for &fill_frac in &[0.0f32, 0.2, 0.7] {
+                let npix = nlines * nsamps;
+                let mut qa: Vec<u16> = (0..npix)
+                    .map(|_| if rng.next_f32() < fill_frac { 1 } else { 0 })
+                    .collect();
+                if nlines % LAERO_WINDOW == 1 {
+                    qa[(nlines - 1) * nsamps..].fill(1);
+                }
+                if nlines % LAERO_WINDOW == 2 && nsamps % LAERO_WINDOW == 1 {
+                    qa[(nlines - 1) * nsamps - 1] = 1;
+                    qa[nlines * nsamps - 1] = 1;
+                }
+                let mut ipflag: Vec<u8> = (0..npix)
+                    .map(|i| {
+                        let r = rng.next_f32();
+                        if is_fill_pixel(qa[i]) {
+                            1 << IPFLAG_FILL
+                        } else if r < 0.3 {
+                            1 << IPFLAG_WATER
+                        } else if r < 0.6 {
+                            (1 << IPFLAG_CLEAR) | (1 << IPFLAG_WATER)
+                        } else {
+                            1 << IPFLAG_CLEAR
+                        }
+                    })
+                    .collect();
+                let mut data: Vec<f32> = (0..npix).map(|_| rng.next_f32()).collect();
+
+                // Two calls in sequence, like taero then teps
+                let mut want_data = data.clone();
+                let mut want_ipflag = ipflag.clone();
+                for _ in 0..2 {
+                    aerosol_interp_serial(
+                        &mut want_data, &mut want_ipflag, &qa, nlines, nsamps,
+                        LAERO_WINDOW, LHALF_AERO_WINDOW,
+                    );
+                    aerosol_interp(
+                        &mut data, &mut ipflag, &qa, nlines, nsamps,
+                        LAERO_WINDOW, LHALF_AERO_WINDOW,
+                    );
+                    let same_data = want_data.iter().zip(&data).all(|(a, b)| a.to_bits() == b.to_bits());
+                    assert!(same_data, "data differs for {nlines}x{nsamps}, fill {fill_frac}");
+                    assert_eq!(want_ipflag, ipflag, "ipflag differs for {nlines}x{nsamps}, fill {fill_frac}");
+                }
+            }
+        }
     }
 
     #[test]
