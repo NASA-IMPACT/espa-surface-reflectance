@@ -5,6 +5,7 @@ GitHub issue.
 
 - **Issues 1–10** were found while reviewing the GDAS changeset (`b271310`).
 - **Issues 11–18** were reported by J. Ju (LaSRC code review, Nov 2026). They are **not** caused by GDAS: they are already present in release v3.5.1.0, the version HLS runs today, and affect VIIRS and GDAS runs equally. They are listed here so the Rust port can decide, for each one, whether to reproduce or fix it.
+- **Item 19** is an **ongoing investigation** (smoke/plume artifacts in the aerosol repair). It records what has been tried so far; there is no confirmed cause or fix yet.
 
 **Status: drafts.** Nothing here has been fixed on this branch. Items marked "changes output" will
 shift GDAS results slightly once fixed, so each fix should come with a before/after comparison on a
@@ -30,6 +31,7 @@ small reference set (see README section 3).
 | 16 | CMG row/column clamped one past the end of the array | Low (unreachable in practice) | No |
 | 17 | Pixel-centre line offset uses `i - 0.5` instead of `i + 0.5` | Low (negligible) | Negligible |
 | 18 | Landsat SR assumes a nadir view for the atmospheric terms | Design limitation, under investigation | Yes (L30, off-nadir pixels) |
+| 19 | Smoke/plume-like artifacts over snow/ice from the aerosol repair | **Ongoing investigation, no fix yet** | To be determined |
 
 ---
 
@@ -335,3 +337,69 @@ scattering dominates. J. Ju listed this among the points to raise with Eric.
 
 **Action:** discuss with Eric. A fix would mean using per-pixel view angles for Landsat, as is done
 for Sentinel-2.
+
+---
+
+# Ongoing investigation
+
+## 19. Smoke/plume-like artifacts over snow/ice from the aerosol repair
+
+> **Status: ongoing work (T. Vo, 2026). There is no definite answer yet.** The notes below record
+> what has been observed and tested so far, and a working hypothesis. Nothing has been changed on
+> this branch, and none of the variants tested is ready for production.
+
+**Symptom:**
+- Smooth, smoke- or plume-like streaks in surface reflectance, extending downward and to the right in image coordinates.
+- Seen mostly over bright snow/ice.
+- Strongest in B01–B04 and also visible in B11/B12.
+- Appears with both VIIRS and GDAS ancillary data, so it is not caused by GDAS. Water vapor and ozone are applied as scene-centre values and do not create spatial structure.
+
+**Example scene:** `HLS.S30.T15VVD.2025027T174641.v2.0`
+(`S2C_MSIL1C_20250127T174641_N0511_R098_T15VVD_20250127T192639`).
+**Control scene** (normal, no artifact): `HLS.S30.T35NKJ.2025200T083559`
+(`S2B_MSIL1C_20250719T083559_N0511_R064_T35NKJ_20250719T121513`).
+
+**Where in the code (Sentinel-2 path):**
+
+The aerosol field is built in stages (`compute_sentinel_refl.c:1790-1808`, `aero_interp.c`). Debug
+builds wrote a checkpoint after each stage:
+
+| Checkpoint | Stage |
+|---|---|
+| `aerosols` | Aerosol retrieval |
+| `aerosols2` | 6 × 6 window interpolation |
+| `aerosols3` | Failed-retrieval flag expanded by 25 × 25 pixels: `ipflag_expand_failed_sentinel`, `HALF_EXPAND_WIN 12` (`aero_interp.c:657`) |
+| `aerosols4` | Failed pixels replaced by a 61 × 61 local average of valid pixels, repeated in passes: `aero_avg_failed_sentinel`, `HALF_FAILED_WIN 30` (`aero_interp.c:739-741`) |
+
+**Observations so far (T15VVD):**
+- The 6 × 6 interpolation output is the same across all the variants tested. The difference first appears between `aerosols3` and `aerosols4`, i.e. in the failed-pixel repair.
+- Failed-retrieval pixels go from 1.85% of the scene to 67.38% after the 25 × 25 expansion (about 36 times more). About 81 million pixels change in the repair step.
+- The repair runs up to 13 passes. In the debug layers, the median fraction of donor pixels that were themselves repaired earlier is 1.0.
+
+**Working hypothesis (not confirmed):** an in-place "donor cascade" in the repair loop.
+- The loop scans top-to-bottom, left-to-right.
+- It marks a pixel as valid (`smflag[curr_pix] = true`, e.g. `aero_interp.c:947`) as soon as it is repaired.
+- Repaired values therefore become donors for pixels later in the same scan, which would carry values downward and to the right, matching the direction of the streaks.
+
+**Variants tested (local debug builds of `b271310`):**
+
+| Variant | What it changes | Result so far |
+|---|---|---|
+| First pass only (`firstpass_only` / `direct_repair_masked`) | Repair once from original valid pixels; leave the rest unfilled | Plume removed in T15VVD; control scene unchanged. But it leaves large no-data gaps (B12 difference +1334 / −1830 DN), so it is a diagnostic only. |
+| `limited_propagation_1` | Allow one propagation pass | Artifact returns: one in-place pass already repaired 98.2% of the unfilled pixels, because of the cascade |
+| `frozen_mask` | Donors taken from a frozen copy of the mask in each pass | Appears to work, but far too slow; cancelled |
+| Expansion radius sweep (`HALF_EXPAND_WIN` 6, 24, 30, 48; default 12) | Size of the failed-flag expansion | r = 6 worse; r = 24 removed some artifacts; r = 48 unstable. No single radius works. |
+| `snapshot_onepass` | One extra pass using a frozen snapshot | Built; result not yet evaluated |
+
+**Related work:** J. Ju's change on the `docs/jju-review` branch sets `use_filled = false` in the
+second forward and final reverse repair passes of the **Landsat** routine
+(`fill_with_local_average_landsat`, `aero_interp.c:236-400`), so repaired values are not reused as
+donors. This is consistent with the hypothesis above. It is being tested on six Landsat scenes on
+Meteor (baseline vs J. Ju's change, with VIIRS and with GDAS ancillary data). The results are pending.
+
+**Open questions / next steps:**
+- Confirm the hypothesis, e.g. by reversing the scan order (the streaks should then change direction).
+- Look for a repair that limits propagation around the original failed pixels. It must be fast enough for production and validated on both artifact and normal scenes.
+- Test sensitivity to the AOT failure threshold.
+- Evaluate J. Ju's Landsat results and decide whether an equivalent change applies to the Sentinel-2 routine.
+- Review the findings with Eric before any change is proposed.
