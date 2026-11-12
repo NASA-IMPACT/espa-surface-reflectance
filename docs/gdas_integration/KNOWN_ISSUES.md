@@ -9,7 +9,7 @@ small reference set (see README section 3).
 
 | # | Issue | Severity | Fixing changes output? |
 |---|---|---|---|
-| 1 | Water vapor is half its true value (same as the existing VIIRS/MODIS path) | Known behaviour | Yes, for all sources; science decision |
+| 1 | Water vapor is half its true value (same as the existing VIIRS/MODIS path) | Known behaviour (inherited) | Yes, for all sources; science decision |
 | 2 | GDAS grid is shifted 1° in longitude | High | Yes (GDAS) |
 | 3 | Wrong neighbour at the 179°–180° longitude wrap | Medium | Yes (GDAS, ~1° strip) |
 | 4 | Half-cell (0.025°) offset when resampling to the CMG grid | Low | Yes (GDAS, negligible) |
@@ -28,11 +28,32 @@ small reference set (see README section 3).
 (`wv[l] = (uint16)(value*10.0)`), `compute_refl_subr.c:248` (`uwv = wv / WV_SCALE_FACTOR`).
 
 **What happens:**
-- GDAS `PWAT` is in kg/m², and 1 g/cm² = 10 kg/m², so the correct value is kg/m² ÷ 10.
-- The code stores kg/m² × 10 and later divides by 200, which gives kg/m² ÷ 20: half the true value.
-- VIIRS has the same factor of 2: the file stores g/cm² × 100 and the code divides by 200.
-- For VIIRS and MODIS the factor of 2 is documented as deliberate. Commit `ebea983` (G. Schmidt, 2023) says it "reintroduced the WV scale factor bug for both MODIS and VIIRS", and the comment on `WV_SCALE_FACTOR` in `common.h` reads "USGS OPS with MODIS bug, and added bug for VIIRS".
-- For GDAS there is **no record of intent**. The GDAS changeset (`a64c9cf`, `b271310`) only adds a third entry, `200`, to `WV_SCALE_FACTOR` and stores GDAS as kg/m² × 10, which is the same encoding as the VIIRS file (g/cm² × 100). Neither the commit messages nor the code comments mention the factor of 2. The result is that GDAS goes through exactly the same halving as VIIRS, so GDAS and VIIRS stay consistent, but whether this was a conscious choice should be confirmed with Eric.
+
+GDAS `PWAT` is in kg/m², and 1 g/cm² = 10 kg/m², so the correct conversion is kg/m² ÷ 10. The GDAS
+code stores kg/m² × 10 and later divides by `WV_SCALE_FACTOR` = 200, which gives kg/m² ÷ 20: half the
+true value.
+
+VIIRS does exactly the same. In the VIIRS ancillary file (checked on `VJ104ANC.A2025011`) the
+`Coarse Resolution Water Vapor` variable is `uint16` with `scale_factor = 0.01` and `units = g/cm^2`,
+so the true value is the stored number ÷ 100 (a stored 145 means 1.45 g/cm²). LaSRC reads the stored
+numbers unscaled (`H5Dread(..., H5T_NATIVE_USHORT, ..., wv)` in `lut_subr.c`) and then divides by 200,
+so it uses 0.725 g/cm² instead of 1.45.
+
+| | Value in the internal `wv` array | Divided by | Result | True value | Ratio |
+|---|---|---|---|---|---|
+| VIIRS | g/cm² × 100 (as stored in the file) | 200 | g/cm² ÷ 2 | g/cm² | ½ |
+| GDAS | kg/m² × 10 = g/cm² × 100 | 200 | g/cm² ÷ 2 | g/cm² | ½ |
+
+The GDAS `× 10` puts GDAS water vapor into the same units as the VIIRS file, so both go through the
+same ÷ 200 and both end up at half the true value. This is why switching from VIIRS to GDAS does not
+change HLS outputs through this route.
+
+**History:**
+
+1. **MODIS:** USGS operations already divided MODIS water vapor by 200 instead of 100. The commented-out lines in `common.h` show this was known (`{200, 100} /** USGS OPS with MODIS bug **/`, and a fixed `{100, 100}` that was never switched on).
+2. **Jan 2023 (`18875d4`):** VIIRS support was added with the correct divisor, 100.
+3. **Aug 2023 (`3fc9b0a`, `ebea983`, G. Schmidt):** VIIRS was changed to 200 as well, "reintroduced the WV scale factor bug for both MODIS and VIIRS", so the MODIS-to-VIIRS switch would not change operational outputs. The `common.h` comment reads "USGS OPS with MODIS bug, and added bug for VIIRS". This is the behaviour of release v3.5.1.0, the version HLS runs today.
+4. **2026 (`a64c9cf`, `b271310`, E. Vermote):** the GDAS changeset adds a third entry, `200`, for GRIB, so GDAS inherits the same halving. Neither the commit messages nor the code comments mention the factor of 2, so whether this was a conscious choice for GDAS should be confirmed with Eric.
 
 **Recommendation:** confirm with Eric, then keep it for now and document it. Reproduce it deliberately in the Rust port,
 behind a named constant. Fixing it changes HLS reflectance for every ancillary source, so it needs
