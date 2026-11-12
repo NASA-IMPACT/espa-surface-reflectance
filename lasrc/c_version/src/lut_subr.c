@@ -2915,7 +2915,6 @@ static int open_gb_oz_wv_datasets
    
         
 	
-    /*printf("file1 %s, file2 %s\n", filename, file2name);*/
 
 /*
 PWAT time one is 2018-08-04T12:00:00.000000Z
@@ -2941,7 +2940,6 @@ TOZNE time two is 2018-08-04T18:00:00.000000Z*/
    	grib_ret = read_grib2_array(filename, "PWAT", where, &ny, &nx, &tmpfltarray[0][0]);
         read_grib2_date(filename, "PWAT", where, string_string, &frcst_hrs);
     }
-    /*printf("PWAT time one is %s\n", string_string);*/
     date_init (&firstdate, string_string, DATE_FORMAT_DATEA_TIME);
     
     strcpy(where, "atmos col");
@@ -2974,7 +2972,6 @@ TOZNE time two is 2018-08-04T18:00:00.000000Z*/
    	grib_ret = read_grib2_array(file2name, "PWAT", where, &ny, &nx, &tmpfltarray[0][1]);
         read_grib2_date(file2name, "PWAT", where, string_string, &frcst_hrs);
     }
-    /*printf("PWAT time two is %s\n", string_string);*/
     date_init (&seconddate, string_string, DATE_FORMAT_DATEA_TIME);
     
     strcpy(where, "atmos col");
@@ -3025,9 +3022,7 @@ TOZNE time two is 2018-08-04T18:00:00.000000Z*/
     firstsod = firstdate.sod;
     
     daydiff = seconddate.jday2000 - firstdate.jday2000;
-    /*printf("%d %d %d %lf\n", daydiff, seconddate.jday2000, firstdate.jday2000, secondsod);*/
     if (( daydiff == 1 ) && (secondsod == 0.0)) secondsod += 86400.0;  /* after midnight, next day */
-    /*printf("%lf %lf\n", firstsod, secondsod );*/
     
     /*swapped = 0;
     if ( secondsod < firstsod )  {  / * files were entered in reverse order, swap the weights and keep track of this swap! * /
@@ -3063,7 +3058,6 @@ TOZNE time two is 2018-08-04T18:00:00.000000Z*/
    firstweight = -(date.sod - secondsod)/(secondsod - firstsod);
    printf("in open_gb_oz_wv_datasets()   First weight %lf\n", firstweight); 
    printf("in open_gb_oz_wv_datasets()   Second weight %lf\n", secondweight); 
-   //printf("%d %d\n", ny,  nx); 
 
    for (i = 0; i < 2; i++) {   /* PWAT, TOZNE */
    for (j = 0; j < ny*nx; j++) {
@@ -3277,7 +3271,6 @@ int read_auxiliary_files
     int sds_id;          /* ID for the current SDS */
     int sds_index;       /* index for the current SDS */
     
-    /*printf("Acquisition date, time: %ld, %lf\n", date.jday2000, date.sod); */
 
     /*** Read the DEM ***/
     sd_id = SDstart (cmgdemnm, DFACC_RDONLY);
@@ -3904,7 +3897,6 @@ int Grb2_file(char *filename) { /* returns 1 for GRIB1, 2 for GRIB2, 0 for unkno
 
     for (k = 0; k < 4; k++) ctag[k] = (char)tag[k];
 
-    // printf("%s %d\n", ctag, tag[7]);
 
     if (!strcmp(ctag, "GRIB")) {
         if (tag[7] == 1)

@@ -972,12 +972,10 @@ int get_xml_input
     strcpy (acq_date, gmeta->acquisition_date);
     strcpy (acq_time, gmeta->scene_center_time);
     this->meta.time_fill = false;
-    //printf ("     JPR xxxxxxxx %s\n",  gmeta->scene_center_time);
     
     /* new 26-FEB-26 JPR */
     if (this->meta.sat == SAT_SENTINEL_2) {
         ad_hoc_XML_reader(gmeta->scene_center_time);
-        //printf ("     JPR xxxxxxxx %s\n",  gmeta->scene_center_time);
        }
 
     /* Make sure the acquisition time is not too long (i.e. contains too

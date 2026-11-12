@@ -371,13 +371,11 @@ int main (int argc, char *argv[])
 	    if (isGrb2 == 1) {
 	       fd = fopen(auxnm, "rb");
 	       read_grib_date(fd, "PWAT", where, GRBdate, &frcst_hrs);  
-	       //printf("  xxxxxxxx GRBdate is %s\n", GRBdate);	       
 	       fclose(fd);
 	       }
 	    else if (isGrb2 == 2) {
 	       get_new_where(where);
 	       read_grib2_date(auxnm, "PWAT", where, GRBdate, &frcst_hrs);  
-	       //printf("  rrxxxxxxxx GRBdate is %s\n", GRBdate);	       
 	       }	       
 	    strncpy (aux_year, &GRBdate[0], 4);
 	    }

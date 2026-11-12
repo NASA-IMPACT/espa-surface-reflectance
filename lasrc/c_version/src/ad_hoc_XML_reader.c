@@ -43,7 +43,6 @@ if ((fd = fopen("MTD_MSIL1C.xml", "r")) == NULL) {
 fseek(fd,0L,SEEK_SET);
 fseek(fd,0L,SEEK_END);
 k = ftell(fd);
-/*printf("File is %ld bytes long\n", k);*/
 fseek(fd,0L,SEEK_SET);
 
 text = (char *)malloc(k*sizeof(char));
@@ -68,7 +67,6 @@ for (i=0;i<n_lines;i++) {
    else if ( strstr(line, "</Product_Info>")) INGM = 0;
    
    if (INGM) {
-      /*printf("%d -- %s -- \n", i, line);*/
       /* Simplest ever parse -- crude as hell! */
       for(j=0;j<global_stuff;j++) {
          if ( (strstr(line, sgreads[j])) && (strstr(line, egreads[j]))) {

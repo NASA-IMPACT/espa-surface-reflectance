@@ -194,12 +194,10 @@ int read_grib2_array(char *filename, char *what, char *where, int *ny, int *nx, 
     level2(1, level_type1, undef_val1, val1, level_type2, undef_val2, val2, center, subcenter,
            inv_out); /* gets level of parameter */
 
-    // printf("%s -- %s\n", name, inv_out);
 
     if (((strcmp(name, what) && !strcmp(inv_out, where))) || ((!strcmp(name, what) && strcmp(inv_out, where))) ||
         ((strcmp(name, what) && strcmp(inv_out, where)))) {
         do {
-            // printf("%d %s %s %d -- will skip ...\n", j, name, inv_out, pos);
             for (i = 0; i < 100; i++) inv_out[i] = '\0';
             msg = rd_grib2_msg_seq_file(sec, &in_file, &pos, &len, &num_submsgs);
             if (msg == NULL) break;
@@ -237,8 +235,6 @@ int read_grib2_array(char *filename, char *what, char *where, int *ny, int *nx, 
     }
 
     if ((!strcmp(name, what)) && (!strcmp(inv_out, where))) {
-        // printf("FOUND -- %s -- %s\n", name, inv_out);
-        // printf("FOUND %d %d %d %d %d '%s' %s -- %s \n", *nx, *ny, nnpnts, pos, nscan, name, unit, inv_out);
 
         *narray = (float *)malloc(nnpnts * sizeof(float));
 
@@ -260,7 +256,6 @@ int read_grib2_array(char *filename, char *what, char *where, int *ny, int *nx, 
         }
 
     } else {
-        /*printf("Parameter '%s' at level '%s' not found\n", what, where);*/
         retval = 1;
     }
     fseek(in_file.cfile, 0L, SEEK_SET);
@@ -407,12 +402,10 @@ int read_grib2_date(char *filename, char *what, char *where, char *date, int *fr
     level2(1, level_type1, undef_val1, val1, level_type2, undef_val2, val2, center, subcenter,
            inv_out); /* gets level of parameter */
 
-    // printf("%s -- %s\n", name, inv_out);
 
     if (((strcmp(name, what) && !strcmp(inv_out, where))) || ((!strcmp(name, what) && strcmp(inv_out, where))) ||
         ((strcmp(name, what) && strcmp(inv_out, where)))) {
         do {
-            // printf("%d %s %s %d -- will skip ...\n", j, name, inv_out, pos);
             for (i = 0; i < 100; i++) inv_out[i] = '\0';
             msg = rd_grib2_msg_seq_file(sec, &in_file, &pos, &len, &num_submsgs);
             if (msg == NULL) break;
@@ -431,19 +424,15 @@ int read_grib2_date(char *filename, char *what, char *where, char *date, int *fr
     }
 
     if ((!strcmp(name, what)) && (!strcmp(inv_out, where))) {
-        // printf("FOUND -- %s -- %s\n", name, inv_out);
-        // printf("FOUND %d %d %d %d %d '%s' %s -- %s \n", nx, ny, nnpnts, pos, nscan, name, unit, inv_out);
 
         *frcst_val = forecast_hours(sec);
 
         get_time(sec[1] + 12, &Y, &M, &D, &H, &MN, &S); /* gets date/time of parameter */
 
-        // printf("%d %d %d %d %d %d\n", Y, M, D, H, MN, S);
 
         sprintf(date, "%4.4d-%2.2d-%2.2dT%2.2d:%2.2d:%2.2d.000000Z", Y, M, D, H, MN, S); /* ASCII time code A */
 
     } else {
-        /*printf("Parameter '%s' at level '%s' not found\n", what, where);*/
         retval = 1;
     }
     fseek(in_file.cfile, 0L, SEEK_SET);

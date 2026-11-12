@@ -2883,7 +2883,6 @@ void GDS_prt_thin_lon(unsigned char *gds)
         col++;
         if (col == NCOL) {
             col = 0;
-            /*printf("\n");*/
         }
     }
     /*if (col != 0) printf("\n");*/

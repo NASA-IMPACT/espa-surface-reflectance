@@ -180,7 +180,6 @@ int init_sr_refl
        calculations */
        
 
-    /*printf("Acquisition date, time: %ld, %lf\n", input->meta.acq_date.jday2000, input->meta.acq_date.hour); */
 
 
     retval = read_auxiliary_files (cmgdemnm, rationm, auxnm, aux2nm, aux_src, dem,
