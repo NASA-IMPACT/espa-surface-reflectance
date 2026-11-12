@@ -1,4 +1,4 @@
-# Known issues in the GDAS changeset (draft for the engineering team)
+# Known issues in the GDAS changeset
 
 Found while reviewing `b271310`. Line numbers refer to this branch (`feature/gdas-integration`).
 Each entry can be copied into a GitHub issue.
@@ -9,7 +9,7 @@ small reference set (see README section 3).
 
 | # | Issue | Severity | Fixing changes output? |
 |---|---|---|---|
-| 1 | Water vapor is half its true value (intentional, matches VIIRS/MODIS) | Known behaviour | Yes, for all sources; science decision |
+| 1 | Water vapor is half its true value (same as the existing VIIRS/MODIS path) | Known behaviour | Yes, for all sources; science decision |
 | 2 | GDAS grid is shifted 1° in longitude | High | Yes (GDAS) |
 | 3 | Wrong neighbour at the 179°–180° longitude wrap | Medium | Yes (GDAS, ~1° strip) |
 | 4 | Half-cell (0.025°) offset when resampling to the CMG grid | Low | Yes (GDAS, negligible) |
@@ -22,7 +22,7 @@ small reference set (see README section 3).
 
 ---
 
-## 1. Water vapor is half its true value (intentional)
+## 1. Water vapor is half its true value (same as the existing VIIRS/MODIS path)
 
 **Where:** `common.h:301` (`WV_SCALE_FACTOR {200, 200, 200}`), `lut_subr.c:3122`
 (`wv[l] = (uint16)(value*10.0)`), `compute_refl_subr.c:248` (`uwv = wv / WV_SCALE_FACTOR`).
@@ -31,9 +31,10 @@ small reference set (see README section 3).
 - GDAS `PWAT` is in kg/m², and 1 g/cm² = 10 kg/m², so the correct value is kg/m² ÷ 10.
 - The code stores kg/m² × 10 and later divides by 200, which gives kg/m² ÷ 20: half the true value.
 - VIIRS has the same factor of 2: the file stores g/cm² × 100 and the code divides by 200.
-- Commit `ebea983` (G. Schmidt, 2023) did this on purpose: "reintroduced the WV scale factor bug for both MODIS and VIIRS" to match USGS operations. The GDAS path copies that behaviour, which keeps GDAS consistent with VIIRS.
+- For VIIRS and MODIS the factor of 2 is documented as deliberate. Commit `ebea983` (G. Schmidt, 2023) says it "reintroduced the WV scale factor bug for both MODIS and VIIRS", and the comment on `WV_SCALE_FACTOR` in `common.h` reads "USGS OPS with MODIS bug, and added bug for VIIRS".
+- For GDAS there is **no record of intent**. The GDAS changeset (`a64c9cf`, `b271310`) only adds a third entry, `200`, to `WV_SCALE_FACTOR` and stores GDAS as kg/m² × 10, which is the same encoding as the VIIRS file (g/cm² × 100). Neither the commit messages nor the code comments mention the factor of 2. The result is that GDAS goes through exactly the same halving as VIIRS, so GDAS and VIIRS stay consistent, but whether this was a conscious choice should be confirmed with Eric.
 
-**Recommendation:** keep it for now and document it. Reproduce it deliberately in the Rust port,
+**Recommendation:** confirm with Eric, then keep it for now and document it. Reproduce it deliberately in the Rust port,
 behind a named constant. Fixing it changes HLS reflectance for every ancillary source, so it needs
 a separate science decision (and possibly reprocessing).
 

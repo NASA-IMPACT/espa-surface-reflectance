@@ -9,7 +9,7 @@ in 2026.
 | Code base | Eric Vermote's changeset, PR #19, last commit `b271310` (26 Jun 2026), on top of release v3.5.1.0 (`6051e02`) |
 | Version string | `3.5.2.0 (Collection 2)` |
 | Branch changes on top of `b271310` | one housekeeping commit (file permissions restored, commented-out debug prints removed; no functional change) and this `docs/gdas_integration/` folder |
-| Known issues | [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md), drafted for the engineering team |
+| Known issues | [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) |
 
 ## 1. What changed in the C code
 
@@ -23,7 +23,7 @@ All changes are in `lasrc/c_version/src/`.
 | `lut_subr.c` | New `open_gb_oz_wv_datasets()`. It reads `PWAT` and `TOZNE` from the two GDAS files, interpolates them linearly to the acquisition time, and resamples the 1° grid to the 0.05° CMG grid that LaSRC uses (bilinear: `get_cart_linesamp()`, `get_cart_interp()`). It also adds `Grb2_file()`, which detects GRIB1 or GRIB2 from the file header. |
 | `lasrc.c`, `get_args.c`, `lasrc.h` | New `--aux2` option. GRIB is detected from the file contents, not the file name. GRIB files are read from `$LASRC_AUX_DIR/LADS/` (no year sub-folder). |
 | `compute_refl_subr.c`, `compute_landsat_refl.c`, `compute_sentinel_refl.c` | Pass the second aux file name and the acquisition date through to `read_auxiliary_files()`. |
-| `common.h` | New `GRIB` entry in `aux_src_t` with its scale factors and defaults. The water-vapor scale factor deliberately repeats the existing factor-of-2 behaviour (see KNOWN_ISSUES #1). Version set to 3.5.2.0. |
+| `common.h` | New `GRIB` entry in `aux_src_t` with its scale factors and defaults. The water-vapor scale factor for GRIB is the same as for VIIRS/MODIS, so GDAS inherits their factor-of-2 behaviour (see KNOWN_ISSUES #1). Version set to 3.5.2.0. |
 | `compute_sentinel_refl.c` | Bug fix: the fill check now uses `qaband[curr_pix]`, not `qaband[i]`. |
 | `input.c` | Sentinel-2 acquisition date/time is taken from the scene-centre time, not `T00:00:00`. |
 | `output.h` | Reflectance output encoding changed from `0.0000275 / -0.2` to `0.0001 / 0.0`. **This changes every SR output, not just GDAS runs** (see KNOWN_ISSUES #5). |
