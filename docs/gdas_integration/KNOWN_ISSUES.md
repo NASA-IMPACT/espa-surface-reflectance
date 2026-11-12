@@ -1,7 +1,10 @@
-# Known issues in the GDAS changeset
+# Known issues in LaSRC and the GDAS changeset
 
-Found while reviewing `b271310`. Line numbers refer to this branch (`feature/gdas-integration`).
-Each entry can be copied into a GitHub issue.
+Line numbers refer to this branch (`feature/gdas-integration`). Each entry can be copied into a
+GitHub issue.
+
+- **Issues 1–10** were found while reviewing the GDAS changeset (`b271310`).
+- **Issues 11–18** were reported by J. Ju (LaSRC code review, Nov 2026). They are **not** caused by GDAS: they are already present in release v3.5.1.0, the version HLS runs today, and affect VIIRS and GDAS runs equally. They are listed here so the Rust port can decide, for each one, whether to reproduce or fix it.
 
 **Status: drafts.** Nothing here has been fixed on this branch. Items marked "changes output" will
 shift GDAS results slightly once fixed, so each fix should come with a before/after comparison on a
@@ -19,6 +22,14 @@ small reference set (see README section 3).
 | 8 | `--aux2` only works as `--aux2=FILE` | Low | No |
 | 9 | Missing checks when a GRIB variable is not found | Medium | No (robustness) |
 | 10 | Minor: truncation, format string, memory | Low | Truncation only |
+| 11 | Landsat green band wavelength is 0.585 µm, OLI band 3 is centred near 0.561 µm | Open science question | Yes (L30 green) |
+| 12 | View-zenith transmittance uses the wrong LUT angle grid | Medium | Yes (mainly S30) |
+| 13 | Landsat aerosol interpolation reads a window centre outside the image | Medium (out-of-bounds read, rare) | Yes (rare L30 edge rows/columns) |
+| 14 | Quadratic coefficient for the Angstrom fit is truncated to an integer | Medium | Yes (S30 and L30) |
+| 15 | TOA and intermediate SR clamped to [−0.2, 1.6] without a flag | Design defect | Yes (bright / high-sun-zenith pixels) |
+| 16 | CMG row/column clamped one past the end of the array | Low (unreachable in practice) | No |
+| 17 | Pixel-centre line offset uses `i - 0.5` instead of `i + 0.5` | Low (negligible) | Negligible |
+| 18 | Landsat SR assumes a nadir view for the atmospheric terms | Design limitation, under investigation | Yes (L30, off-nadir pixels) |
 
 ---
 
@@ -174,3 +185,153 @@ message was used.
 - **Memory:** the static `tmpfltarray` buffers in `open_gb_oz_wv_datasets()` are allocated by the readers and never freed. This is harmless for one scene per process, but matters if the code becomes a library.
 - **Debug output:** several unconditional `printf` lines in `open_gb_oz_wv_datasets()` (acquisition time, weights) should go through the normal verbose logging.
 - **Commented-out code in `common.h:38-40`:** test aerosol-window settings (`LAERO_WINDOW 1`) are left in a comment. Production values are active; the comment could be removed.
+
+---
+
+# Issues reported by J. Ju (pre-existing in LaSRC v3.5.1.0)
+
+Source: J. Ju, "LaSRC Review" slides (Nov 2026). Each item was checked against the code on this
+branch; notes added in that check are marked **Check:**.
+
+## 11. Landsat green band wavelength is 0.585 µm, OLI band 3 is centred near 0.561 µm
+
+**Where:** `lut_subr.c:24-25`
+```c
+float landsat_lambda[NREFLL_BANDS] = {0.443, 0.480, 0.585, 0.655, 0.865, 1.61, 2.2};
+```
+used in `lut_subr.c:108` to scale the aerosol optical thickness to each band:
+`mraot550nm = raot550nm / normext * pow(lambda[iband] / 0.55, -eps)`.
+
+**Evidence:**
+- **Rayleigh check (points to 0.561 µm):** the green Rayleigh optical thickness in LaSRC's `tauray-ldcm.ASC` is 0.09070. The standard approximation `tauray = 0.008569 λ⁻⁴ (1 + 0.0113 λ⁻² + 0.00013 λ⁻⁴)` gives 0.0897 at 0.561 µm and 0.0757 at 0.585 µm. **Check:** recomputed, same values.
+- **Aerosol LUT check (points to 0.585 µm):** the Angstrom exponent derived from `TRANSLUTV3.0-ldcmb3-URBANCLEAN-V2.0.ASCII` looks reasonable with 0.585 µm.
+
+The two lookup tables seem to have been built with different green wavelengths. For comparison, the
+Sentinel-2 green band uses 0.560 µm (`sentinel_lambda`, `lut_subr.c:29-35`).
+
+**Impact:** L30 green band only, through the band-scaled AOT. For an Angstrom exponent of 1.5,
+using 0.585 instead of 0.561 lowers the green-band AOT by about 6%.
+
+**Action:** ask Eric which wavelength each LUT was generated for before changing anything.
+
+## 12. View-zenith transmittance uses the wrong LUT angle grid
+
+**Where:** `lut_subr.c:321-322` (in `atmcorlamb2`)
+```c
+comptrans (ip1, ip2, iaot1, iaot2, xtv, mraot550nm, iband, pres, tpres,
+    aot550nm, transt, xtvstep, xtvmin, tts, &xttv);
+```
+with `xtvmin = 2.84090`, `xtvstep = 3.68` set in `compute_refl_subr.c:160-161`.
+
+**What happens:**
+- `xtvmin`/`xtvstep` describe the view-angle grid of the atmospheric-reflectance LUT.
+- The transmittance LUT (`TRANS_LUT_V3.0-URBANCLEAN-V2.0.ASCII`) uses one grid for both sun and view angles: 0° to 80° in 4° steps (`xtsmin = 0`, `xtsstep = 4`).
+- `comptrans()` picks the row with `(xtv - 2.84) / 3.68` but interpolates with the 4° grid (`xmts = (xtv - tts[its]) * 0.25`).
+- **Check:** for view zeniths ≥ 2.84° the code therefore extrapolates from the wrong pair of rows. For example, at 6° it uses the 0° and 4° rows with weight 1.5 instead of interpolating between 4° and 8°. Below 2.84° the result is correct.
+
+**Impact:**
+- **Sentinel-2:** affected, because it uses per-pixel view zenith (up to ~11°). The error is small, since transmittance changes slowly with angle near nadir.
+- **Landsat:** no impact by default, because Landsat SR uses a view zenith of 0. **Check:** with `--use_orig_aero_alg`, the Landsat aerosol retrieval uses per-pixel view zenith and would be affected.
+
+**Suggested fix:** pass `xtsstep, xtsmin` (4, 0) for the view-angle call as well.
+
+## 13. Landsat aerosol interpolation reads a window centre outside the image
+
+**Where:** `aero_interp.c:97` and `aero_interp.c:147-148` (`aerosol_interp_landsat`)
+```c
+center_line = (int) (line * aero_step) * aero_window + half_aero_window;
+center_samp = (int) (samp * aero_step) * aero_window + half_aero_window;
+```
+
+**What happens:**
+- Landsat retrieves aerosol on a 3 × 3 window grid, at centres 1, 4, 7, … (`compute_landsat_refl.c:981-999`).
+- When `nlines % 3 == 1` (or `nsamps % 3 == 1`), the last line (or column) maps to a window centre at index `nlines` (or `nsamps`), outside the image, where no aerosol was retrieved.
+- The interpolation uses that value anyway.
+- **Check:** for the last line this reads past the end of the `taero` array (an out-of-bounds memory read, not just a stale value). For the last column it reads the first pixel of the next row.
+
+**Impact:** L30 only, and rare: it needs the last line or column of the scene to contain valid
+(non-fill) data. Sentinel-2 uses a different routine and is not affected.
+
+**Suggested fix:** clamp the window centre to the last centre inside the image.
+
+## 14. Quadratic coefficient for the Angstrom fit is truncated to an integer
+
+**Where:** `compute_landsat_refl.c:968` and **Check:** also `compute_sentinel_refl.c:1036`
+```c
+xd = (int) ((eps2 * eps2) - (eps3 * eps3));
+```
+
+**What happens:**
+- With `LOW_EPS = 1.0`, `MOD_EPS = 1.75`, `HIGH_EPS = 2.5`, the true value is −3.1875, but the cast stores −3.
+- `xd` is one coefficient of the quadratic used to find the Angstrom exponent with the smallest residual (`coefa`, `coefb`, `compute_landsat_refl.c:1374-1375`).
+- The neighbouring coefficients (`xa`, `xb`, `xe`) are not truncated.
+
+**Impact:** shifts the retrieved Angstrom exponent, and hence the aerosol model, for both L30 and S30.
+
+**Suggested fix:** remove the `(int)` cast in both files.
+
+## 15. TOA and intermediate SR clamped to [−0.2, 1.6] without a flag
+
+**Where:**
+- TOA: `compute_landsat_refl.c:150-158` (`compute_landsat_toa_refl`)
+- SR: `compute_landsat_refl.c:686-689` and `:1784-1787`; **Check:** also `compute_sentinel_refl.c:1910-1913`
+
+**What happens:**
+- TOA reflectance is divided by cos(SZA) and then clamped to `[MIN_VALID_REFL, MAX_VALID_REFL]` = [−0.2, 1.6].
+- From the Landsat input range [−0.09998, 1.2107], the value can exceed 1.6 for SZA > ~41° and fall below −0.2 for SZA > ~60°.
+- The clamped values are not flagged, and they feed the aerosol retrieval and the SR calculation.
+- Intermediate SR is clamped the same way.
+- Only the final output needs clamping. Also, the code comment says "scaled" where it should say "unscaled".
+
+**Impact:** bright targets (snow, cloud edges) and high-sun-zenith scenes.
+
+**Suggested fix:** keep full-range values internally, clamp only when writing output, and flag clamped pixels.
+
+## 16. CMG row/column clamped one past the end of the array
+
+**Where:** `compute_landsat_refl.c:841-847`, `compute_refl_subr.c:236-242`, `compute_sentinel_refl.c:909-915`
+```c
+else if (lcmg >= CMG_NBLAT) lcmg = CMG_NBLAT;   /* should be CMG_NBLAT - 1 */
+else if (scmg >= CMG_NBLON) scmg = CMG_NBLON;   /* should be CMG_NBLON - 1 */
+```
+
+**Impact:** none in practice. The index only reaches the limit for latitudes south of −89.975° or
+an invalid longitude. It would be an out-of-bounds read if it ever happened.
+
+**Check:** other places in the same files already use the correct `CMG_NBLAT - 1` / `CMG_NBLON - 1`
+(e.g. `compute_landsat_refl.c:1072-1077`).
+
+**Suggested fix:** use `- 1` everywhere.
+
+## 17. Pixel-centre line offset uses `i - 0.5` instead of `i + 0.5`
+
+**Where:** `compute_landsat_refl.c:803` and `:1033`; **Check:** also `compute_sentinel_refl.c:868` and `:1082`
+```c
+img.l = i - 0.5;   /* strictly should be i + 0.5, matching img.s = j + 0.5 */
+```
+
+**Impact:** negligible. The position used for the ancillary lookup is shifted by at most one
+pixel in the line direction (≤ 30 m for Landsat), far smaller than the 0.05° (~5 km) CMG cell.
+
+**Suggested fix:** `img.l = i + 0.5`.
+
+## 18. Landsat SR assumes a nadir view for the atmospheric terms (under investigation)
+
+**Where:** `compute_landsat_refl.c:589-600` (view zenith initialised to 0, used as `xtv_center` in
+`atmcorlamb2`). Sentinel-2 uses per-pixel view angles.
+
+**What happens:** the Rayleigh (molecular) scattering term depends on the view angle through the
+scattering phase function. J. Ju's comparison of the Rayleigh phase function at the observed angle
+versus nadir (solar zenith 50°) gives ratios of about:
+- 1.03–1.04 for backward views of −4° to −8°
+- about 0.94 at +8° for L8/L9
+- about 0.92 at +10° for S2.
+
+Treating every Landsat pixel as nadir therefore misstates the Rayleigh contribution toward the
+swath edges.
+
+**Impact:** L30 only, growing toward the swath edges and strongest in the blue bands, where Rayleigh
+scattering dominates. J. Ju listed this among the points to raise with Eric.
+
+**Action:** discuss with Eric. A fix would mean using per-pixel view angles for Landsat, as is done
+for Sentinel-2.

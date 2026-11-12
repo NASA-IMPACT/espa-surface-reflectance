@@ -9,7 +9,7 @@ in 2026.
 | Code base | Eric Vermote's changeset, PR #19, last commit `b271310` (26 Jun 2026), on top of release v3.5.1.0 (`6051e02`) |
 | Version string | `3.5.2.0 (Collection 2)` |
 | Branch changes on top of `b271310` | one housekeeping commit (file permissions restored, commented-out debug prints removed; no functional change) and this `docs/gdas_integration/` folder |
-| Known issues | [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) |
+| Known issues | [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md): issues 1–10 in the GDAS changeset, issues 11–18 pre-existing in LaSRC (J. Ju's review) |
 
 ## 1. What changed in the C code
 
