@@ -89,6 +89,12 @@ returns 16.12 for a query at 15.12, and 1.0 for a query at 0.0.
 resampled `wv`/`oz` arrays to `whatever.hdf`. Enable it for one scene, then compare with the same
 GDAS file read by an independent tool (e.g. `xarray` + `cfgrib`, or `wgrib2`).
 
+**Confirmed on real data (Nov 2026):** an independent re-implementation of the GRIB-to-CMG steps
+reproduces the `uwv, uoz` values LaSRC printed for three Sentinel-2 granules and 12 runs only when
+the 1° grid is shifted one cell east. At the scene centre, the shift changes LaSRC's ozone by
++17 DU (+4.4%) at T15VVD and its water vapor by +0.9 kg/m² (+2%) at T19LGF. See
+[ANCILLARY_SOURCE_COMPARISON.md](ANCILLARY_SOURCE_COMPARISON.md#3-how-lasrc-turns-the-grib-files-into-scene-water-vapor-and-ozone).
+
 **Suggested fix:** use `jj = j + nx / 2` (assuming the row starts at 0°E), or derive the first
 longitude from the GRIB grid definition rather than assuming it.
 
