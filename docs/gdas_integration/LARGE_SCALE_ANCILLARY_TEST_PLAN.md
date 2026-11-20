@@ -6,7 +6,8 @@ validation granule set (S30 and L30) with each low-latency ancillary scenario an
 results with the validated GDAS-analysis run.
 
 **Status:** plan; phase 0 (inventory) mostly done, see [section 7.1](#71-phase-0-results). Decisions
-are listed in [section 8](#8-decisions).
+are listed in [section 8](#8-decisions). Pilot results (10 S30 + 10 L30 granules) are in
+[PILOT_ANCILLARY_LATENCY_RESULTS.md](PILOT_ANCILLARY_LATENCY_RESULTS.md).
 
 ## 1. Goal
 
