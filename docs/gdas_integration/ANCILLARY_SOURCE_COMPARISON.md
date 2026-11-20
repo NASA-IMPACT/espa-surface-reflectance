@@ -139,6 +139,18 @@ Columns: **at scene centre** = after time interpolation only, evaluated at the s
 | | S1 | 2.919 | 2.847 | 28 | 0.14 | 359.41 | 367.48 | 146 (LaSRC: 147) | 0.3675 |
 | | S2 | 2.919 | 2.845 | 28 | 0.14 | 359.41 | 367.53 | 147 | 0.3675 |
 | | S3 | 2.935 | 2.895 | 28 | 0.14 | 360.01 | 368.25 | 147 | 0.3675 |
+| T16TCK* | V0 | 5.612 | 5.645 | 56 | 0.28 | 319.46 | 316.36 | 126 | **0.3150** |
+| | S1 | 5.618 | 5.673 | 56 | 0.28 | 314.81 | 313.18 | 125 | 0.3125 |
+| | S2 | 5.603 | 5.647 | 56 | 0.28 | 315.00 | 312.93 | 125 | 0.3125 |
+| | S3 | 5.714 | 5.790 | 57 | 0.285 | 320.13 | 314.98 | 125 | 0.3125 |
+
+\* T16TCK (`S2A_MSIL1C_20250109T164651_N0511_R126_T16TCK_20250109T184430`, 9 Jan 2025, central
+Illinois) is the granule that failed in the S30 pilot
+([PILOT_ANCILLARY_LATENCY_RESULTS.md](PILOT_ANCILLARY_LATENCY_RESULTS.md#4-the-t16tck-outlier)); it
+was not part of the smoke test. S1–S3 are LaSRC's logged values; V0 is reproduced from the GDAS
+analyses with the same steps (`scene_centre_values.py --granule T16TCK`). Water vapor is the same
+for V0, S1 and S2; the only difference LaSRC sees between V0 and S1–S3 is one ozone step (315.0 vs
+312.5 DU).
 
 How much the four ancillary options differ from each other at the scene centre (the input data
 itself, before LaSRC):
@@ -148,6 +160,7 @@ itself, before LaSRC):
 | T19LGF | 0.83 kg/m² | 1.7% | 0.25 DU | 0.1% | 0.1 kg/m² / 2.5 DU |
 | T15VVD | 0.06 kg/m² | 4.3% | 1.64 DU | 0.4% | 0.1 kg/m² / 2.5 DU |
 | T43VDD | 0.02 kg/m² | 0.6% | 0.62 DU | 0.2% | 0.1 kg/m² / 2.5 DU |
+| T16TCK* | 0.11 kg/m² | 2.0% | 5.32 DU | 1.7% | 0.1 kg/m² / 2.5 DU |
 
 - **T15VVD and T43VDD** are January high-latitude scenes with very little water vapor (1.4 and
   2.9 kg/m²). The four options differ by less than one storage step, so LaSRC used the same `uwv`
