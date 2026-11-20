@@ -5,7 +5,8 @@ Follow-up to the 3-granule smoke test in
 validation granule set (S30 and L30) with each low-latency ancillary scenario and compares the
 results with the validated GDAS-analysis run.
 
-**Status:** plan, not started. Open decisions are listed in [section 8](#8-open-decisions).
+**Status:** plan; phase 0 (inventory) mostly done, see [section 7.1](#71-phase-0-results). Decisions
+are listed in [section 8](#8-decisions).
 
 ## 1. Goal
 
@@ -36,8 +37,8 @@ containers used for the GDAS-vs-VIIRS validation.
 
 | Product | Granules | Dates | Inputs | V0 (GDAS) outputs |
 |---|---|---|---|---|
-| S30 | 605 SAFE IDs (522 granules after twins) | Jan and Jul 2025 | Sentinel-2 L1C SAFE archive used for the validation | Validated GDAS workspace (to be confirmed in phase 0) |
-| L30 | 614 | Jan and Jul 2025 | Landsat L1 inputs used for the validation | Landsat `b271310` GDAS workspace (location to be confirmed in phase 0) |
+| S30 | 605 SAFE IDs (522 granules after twins) | Jan and Jul 2025 | Sentinel-2 L1C SAFE archive used for the validation | Validated S30 GDAS workspace: 559 product folders, 2.8 TB (to be matched against the granule list) |
+| L30 | 614 | Jan and Jul 2025 | Landsat L1 inputs used for the validation | Landsat `b271310` workspace, `outputs/grib/`: **614 granules, 2.8 TB** (VIIRS runs in `outputs/viirs/`, also 614) |
 
 The Landsat wrapper used for the validation (`do_lasrc_landsat.py`, workspace copy) already selects
 a `gdas1.PGrbF00.*` pair from `LADS/` and accepts `LASRC_AUX_MODE=grib`, so the same per-run
@@ -61,14 +62,18 @@ a `gdas1.PGrbF00.*` pair from `LADS/` and accepts `LASRC_AUX_MODE=grib`, so the 
 
 ## 5. Storage and compute estimates
 
-Measured in the smoke test: one S30 run in debug mode is 6.1 GB (final COGs 0.25 GB, immediate
-LaSRC `.img` bands ~3 GB, intermediate HDFs ~2.8 GB). L30 sizes to be measured in phase 0.
+Measured: one S30 run in debug mode is 6.1 GB (smoke test: final COGs 0.25 GB, immediate LaSRC
+`.img` bands ~3 GB, intermediate HDFs ~2.8 GB). One L30 run in debug mode is ~4.6 GB (existing GDAS
+runs: 2.8 TB / 614). Trimmed and final-only sizes for L30 are estimates.
 
 | Output kept per run | S30 (~1,815 new runs) | L30 (~1,842 new runs) | Total |
 |---|---|---|---|
-| Full debug (current) | ~11 TB | ~3–5 TB | ~15 TB |
-| **Trimmed** (recommended): final COGs + immediate core bands B01–B04, B8A, B11, B12 + logs | ~3.6 TB | ~2–3 TB | **~6 TB** |
-| Final COGs only | ~0.45 TB | ~0.3 TB | ~0.8 TB |
+| Full debug (current) | ~11 TB | ~8.5 TB | ~20 TB |
+| **Final + immediate (chosen)**: final products, immediate LaSRC SR bands, logs, ancillary record | ~3.6–5 TB | ~2.8–3.5 TB | **~6.5–8.5 TB** |
+| Final products only | ~0.45 TB | ~0.7 TB | ~1.2 TB |
+
+Available: **139 TB free** on the HPC scratch file system (2% used), no per-user quota reported.
+Storage does not constrain the retention choice.
 
 Plus ~0.3 TB scratch at 30 concurrent jobs. "Trimmed" keeps both validation stages.
 
@@ -97,13 +102,23 @@ up front where differences can occur.
 
 | Phase | Work | Deliverable | Check before moving on |
 |---|---|---|---|
-| **0. Inventory** | Free space and quota on the HPC scratch; granule lists; V0 outputs present for every S30 and L30 granule; Landsat workspace, container and binary; L30 output size per run | Go / no-go note | All V0 outputs found; storage covers the chosen retention level |
+| **0. Inventory** | Free space and quota on the HPC scratch; granule lists; V0 outputs present for every S30 and L30 granule; Landsat workspace, container and binary; L30 output size per run | Go / no-go note ([7.1](#71-phase-0-results)) | All V0 outputs found; storage covers the chosen retention level |
 | **1. Ancillary pool** | One job: download ~1,050 PWAT/TOZNE extracts, relabel forecasts, write a manifest (file, cycle, forecast hour, MD5) | `ancillary_pool/` + manifest | Every needed cycle present; spot-check decoded times |
 | **2. Screening** | Compute LaSRC's stored `uwv`/`uoz` for V0, S1, S2, S3 for every granule | Screening table (CSV) | Screened V0 values equal the printed V0 values |
 | **3. Pilot** | 10 S30 + 10 L30 granules × S1–S3, mostly from granules flagged in phase 2 | Pilot outputs and logs | Ancillary record correct in every log; trimming works; runtimes as expected |
-| **4. Full run** | Chunked Slurm arrays (≤ 30 jobs), trimmed outputs, ancillary record in every log | ~3,650 runs (or only flagged granules) | All jobs exit 0; output counts match |
+| **4. Full run** | Chunked Slurm arrays (≤ 30 jobs), final + immediate outputs kept, ancillary record per run | ~3,650 runs (all granules × S1–S3) + ancillary table per product | All jobs exit 0; output counts match; ancillary table complete |
 | **5. Validation** | Existing chunked validation CLI (`prepare_lasrc_validation_run.py` → chunks → merge): each scenario vs V0, optionally vs VIIRS; immediate and final | Merged metrics and plots per scenario | Merge complete; V0-vs-VIIRS reproduces the earlier validation |
 | **6. Report** | Extend [ANCILLARY_SOURCE_COMPARISON.md](ANCILLARY_SOURCE_COMPARISON.md) with the large-scale results | Doc update on this branch | Team review |
+
+### 7.1 Phase 0 results
+
+| Check | Result |
+|---|---|
+| Free space | 139 TB free of 141 TB on the HPC scratch file system; no quota reported |
+| S30 V0 outputs | 559 product folders, 2.8 TB in the validated S30 GDAS workspace. To do: match against the 605 SAFE IDs / 522 granules (twins, reruns) |
+| L30 V0 outputs | `outputs/grib/` in the Landsat `b271310` workspace: 614 date/path-row folders, 2.8 TB. Same workspace holds `outputs/viirs/` (614) |
+| L30 run setup | Chunked Slurm arrays (`run_chunk_landsat_apptainer.slurm`, `submit_all_grib_chunks.sh`) with `LASRC_AUX_MODE` per run and `OUTPUT_DIR` per mode; reusable for S1–S3 by pointing each run at its own `LADS/` |
+| GRIB mode | The Landsat workspace's `lasrc_aux/LADS/` already holds staged `gdas1.PGrbF00.*` files, so the L30 GDAS runs used the same GRIB path |
 
 ### Run details
 
@@ -117,14 +132,14 @@ up front where differences can occur.
 - **Validation jobs** are submitted with `--export=NONE`. An inherited conda environment made jobs die
   at start-up in the smoke test.
 
-## 8. Open decisions
+## 8. Decisions
 
-1. **Scope:** run every granule, or screen first and run only granules where a scenario changes
-   LaSRC's stored values? (Recommended: screen first.)
-2. **Retention:** full debug, trimmed (recommended) or final COGs only?
-3. **Validation reference:** V0 only, or V0 and VIIRS?
-4. **GFS resolution:** 1° for consistency with GDAS (as in the smoke test), or add 0.25° for one
-   scenario, given the proposed removal of GFS 1° (NWS PNS 26-30)?
+| # | Topic | Decision |
+|---|---|---|
+| 1 | Scope | **Run every granule** for S1, S2 and S3 (S30: 605 SAFE IDs, L30: 614). The screening step (section 6) is still produced as a cross-check of the runs, not as a filter. |
+| 2 | Retention | **Final products and immediate LaSRC outputs only.** Intermediate HDFs and other debug files are deleted after each run. The scene-centre values LaSRC used (`uwv`, `uoz`, `pres`), the scene-centre lat/lon, the two GRIB files (source, MD5, valid times) and the time weights are written to a per-run record and collected into one table per product. |
+| 3 | Validation reference | Each scenario is compared with **V0** (the existing GDAS-analysis run), which answers the latency question directly. The same validation is also run against the **VIIRS**-based product so the results sit next to the earlier GDAS-vs-VIIRS numbers. *(To confirm.)* |
+| 4 | GFS resolution | 1°, as in the smoke test. *(Optional 0.25° follow-up, given NWS PNS 26-30.)* |
 
 ## 9. Risks
 
