@@ -149,6 +149,42 @@ red dashed lines at the thresholds.
 | S30 immediate | ![](figures/pilot_ancillary_latency/cli_summary/S30_V0_vs_VIIRS_immediate_distribution_summary.png) | ![](figures/pilot_ancillary_latency/cli_summary/S30_S1_vs_VIIRS_immediate_distribution_summary.png) | ![](figures/pilot_ancillary_latency/cli_summary/S30_S2_vs_VIIRS_immediate_distribution_summary.png) | ![](figures/pilot_ancillary_latency/cli_summary/S30_S3_vs_VIIRS_immediate_distribution_summary.png) |
 | L30 immediate | ![](figures/pilot_ancillary_latency/cli_summary/L30_V0_vs_VIIRS_immediate_distribution_summary.png) | ![](figures/pilot_ancillary_latency/cli_summary/L30_S1_vs_VIIRS_immediate_distribution_summary.png) | ![](figures/pilot_ancillary_latency/cli_summary/L30_S2_vs_VIIRS_immediate_distribution_summary.png) | ![](figures/pilot_ancillary_latency/cli_summary/L30_S3_vs_VIIRS_immediate_distribution_summary.png) |
 
+Mean of the per-granule |mean SR difference| vs VIIRS, in HLS DN (reflectance × 10,000): the values plotted in the boxplots above, averaged over the granules.
+
+**L30 immediate** (10 granules)
+
+| Band | Threshold | V0 | S1 | S2 | S3 |
+|---|---|---|---|---|---|
+| B01 | 53 | 0.5 | 0.5 | 0.4 | 0.5 |
+| B02 | 56 | 0.8 | 0.8 | 0.8 | 1.0 |
+| B03 | 54 | 3.4 | 3.1 | 3.1 | 4.1 |
+| B04 | 66 | 1.9 | 1.7 | 1.7 | 2.3 |
+| B06 | 131 | 0.3 | 0.3 | 0.3 | 0.3 |
+| B07 | 87 | 2.8 | 2.7 | 2.6 | 2.9 |
+
+**S30 final** (9 granules)
+
+| Band | Threshold | V0 | S1 | S2 | S3 |
+|---|---|---|---|---|---|
+| B01 | 51 | 0.7 | 7.4 | 7.4 | 7.5 |
+| B02 | 48 | 2.0 | 7.8 | 7.9 | 7.8 |
+| B03 | 55 | 7.7 | 13.2 | 13.3 | 13.1 |
+| B04 | 52 | 3.1 | 10.2 | 10.3 | 10.2 |
+| B11 | 93 | 0.4 | 5.4 | 5.4 | 5.4 |
+| B12 | 64 | 1.1 | 3.6 | 3.6 | 3.5 |
+
+**S30 immediate** (9 granules)
+
+| Band | Threshold | V0 | S1 | S2 | S3 |
+|---|---|---|---|---|---|
+| B01 | 53 | 0.8 | 7.4 | 7.5 | 7.5 |
+| B02 | 56 | 2.1 | 7.9 | 8.0 | 7.9 |
+| B03 | 54 | 7.6 | 13.0 | 13.1 | 12.9 |
+| B04 | 66 | 3.2 | 10.4 | 10.5 | 10.4 |
+| B11 | 131 | 0.4 | 5.4 | 5.4 | 5.4 |
+| B12 | 87 | 1.1 | 3.6 | 3.6 | 3.5 |
+
+
 ### 5.2 Spatial maps of the difference from VIIRS, per band
 
 One figure per band and stage, one panel per scenario. Each dot is a granule at its LaSRC scene
