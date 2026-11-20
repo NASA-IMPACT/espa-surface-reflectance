@@ -11,6 +11,7 @@ in 2026.
 | Branch changes on top of `b271310` | one housekeeping commit (file permissions restored, commented-out debug prints removed; no functional change) and this `docs/gdas_integration/` folder |
 | Known issues | [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md): issues 1–10 in the GDAS changeset, issues 11–18 pre-existing in LaSRC (J. Ju's review) |
 | Ancillary source comparison | [`ANCILLARY_SOURCE_COMPARISON.md`](ANCILLARY_SOURCE_COMPARISON.md): water vapor and ozone used by LaSRC with GDAS analysis, GDAS forecast and GFS (smoke test, 3 granules) |
+| Large-scale test plan | [`LARGE_SCALE_ANCILLARY_TEST_PLAN.md`](LARGE_SCALE_ANCILLARY_TEST_PLAN.md): plan to rerun the S30/L30 validation set with the low-latency ancillary scenarios |
 
 ## 1. What changed in the C code
 
