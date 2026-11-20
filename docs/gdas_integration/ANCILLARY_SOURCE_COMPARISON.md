@@ -103,25 +103,45 @@ three granules. The one miss is T43VDD S1 ozone, where the value is 146.99 vs a 
 
 ### 5.1 Water vapor and ozone: the input files vs what LaSRC used
 
-"At scene" is the correctly located, time-interpolated value at the scene centre. "LaSRC used" is
-the printed `uwv, uoz` (identical to the reproduction except where noted).
+How LaSRC gets from the two GRIB files to the values it uses (steps 2–5 in section 3):
 
-| Granule | Run | PWAT at scene (kg/m²) | Stored `wv` | LaSRC `uwv` | TOZNE at scene (DU) | Stored `oz` | LaSRC `uoz` |
-|---|---|---|---|---|---|---|---|
-| T19LGF | V0 | 47.54 | 484 | **2.42** | 257.97 | 103 | 0.2575 |
-| | S1 | 47.77 | 486 | **2.43** | 258.22 | 103 | 0.2575 |
-| | S2 | 48.06 | 486 | **2.43** | 258.18 | 103 | 0.2575 |
-| | S3 | 47.23 | 486 | **2.43** | 258.01 | 103 | 0.2575 |
-| T15VVD | V0 | 1.377 | 14 | 0.07 | 381.06 | 159 | 0.3975 |
-| | S1 | 1.380 | 14 | 0.07 | 380.61 | 159 | 0.3975 |
-| | S2 | 1.374 | 14 | 0.07 | 379.42 | 159 | 0.3975 |
-| | S3 | 1.319 | 14 | 0.07 | 380.25 | 159 | 0.3975 |
-| T43VDD | V0 | 2.918 | 28 | 0.14 | 359.39 | 147 | 0.3675 |
-| | S1 | 2.919 | 28 | 0.14 | 359.41 | 146 (LaSRC: 147) | 0.3675 |
-| | S2 | 2.919 | 28 | 0.14 | 359.41 | 147 | 0.3675 |
-| | S3 | 2.935 | 28 | 0.14 | 360.01 | 147 | 0.3675 |
+```text
+1. Time interpolation (each 1° grid point):   X = w1 · X_file1 + w2 · X_file2
+                                               w2 = (t_acquisition − t_file1) / 6 h,  w1 = 1 − w2
+2. Spatial interpolation:                      X bilinearly resampled to LaSRC's 0.05° grid;
+                                               the grid cell nearest the scene centre is used
+3. Integer storage (truncation, not rounding): wv = int(PWAT × 10)    → steps of 0.1 kg/m²
+                                               oz = int(TOZNE × 0.4)  → steps of 2.5 DU
+4. Values used for the whole scene:            uwv = wv / 200   (g/cm², with the inherited
+                                                                  factor of 2, KNOWN_ISSUES #1)
+                                               uoz = oz / 400   (cm-atm)
+```
 
-Spread across V0–S3 at the scene centre:
+Example, T19LGF V0 water vapor: 48.47 kg/m² after steps 1–2 → 48.47 × 10 = 484.7 → `wv` = 484 →
+`uwv` = 484 / 200 = 2.42.
+
+Columns: **at scene centre** = after time interpolation only, evaluated at the scene centre;
+**after interpolation (LaSRC's cell)** = after time and spatial interpolation, the value in the
+0.05° grid cell LaSRC uses for the scene (steps 1–2), which is what gets stored; **stored** = step 3;
+**LaSRC `uwv`/`uoz`** = step 4, as printed by LaSRC (identical to the reproduction except where noted).
+
+| Granule | Run | PWAT at scene centre (kg/m²) | PWAT after interpolation, LaSRC's cell (kg/m²) | Stored `wv` | LaSRC `uwv` | TOZNE at scene centre (DU) | TOZNE after interpolation, LaSRC's cell (DU) | Stored `oz` | LaSRC `uoz` |
+|---|---|---|---|---|---|---|---|---|---|
+| T19LGF | V0 | 47.54 | 48.47 | 484 | **2.42** | 257.97 | 257.61 | 103 | 0.2575 |
+| | S1 | 47.77 | 48.64 | 486 | **2.43** | 258.22 | 257.91 | 103 | 0.2575 |
+| | S2 | 48.06 | 48.67 | 486 | **2.43** | 258.18 | 258.05 | 103 | 0.2575 |
+| | S3 | 47.23 | 48.62 | 486 | **2.43** | 258.01 | 257.59 | 103 | 0.2575 |
+| T15VVD | V0 | 1.377 | 1.480 | 14 | 0.07 | 381.06 | 397.92 | 159 | 0.3975 |
+| | S1 | 1.380 | 1.468 | 14 | 0.07 | 380.61 | 398.81 | 159 | 0.3975 |
+| | S2 | 1.374 | 1.457 | 14 | 0.07 | 379.42 | 398.14 | 159 | 0.3975 |
+| | S3 | 1.319 | 1.461 | 14 | 0.07 | 380.25 | 397.89 | 159 | 0.3975 |
+| T43VDD | V0 | 2.918 | 2.849 | 28 | 0.14 | 359.39 | 367.55 | 147 | 0.3675 |
+| | S1 | 2.919 | 2.847 | 28 | 0.14 | 359.41 | 367.48 | 146 (LaSRC: 147) | 0.3675 |
+| | S2 | 2.919 | 2.845 | 28 | 0.14 | 359.41 | 367.53 | 147 | 0.3675 |
+| | S3 | 2.935 | 2.895 | 28 | 0.14 | 360.01 | 368.25 | 147 | 0.3675 |
+
+How much the four ancillary options differ from each other at the scene centre (the input data
+itself, before LaSRC):
 
 | Granule | PWAT spread | Relative | TOZNE spread | Relative | Storage step (PWAT / TOZNE) |
 |---|---|---|---|---|---|
