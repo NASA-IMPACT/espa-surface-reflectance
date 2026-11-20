@@ -18,9 +18,6 @@ not yet a statistical sample (see [Limitations](#7-limitations-and-next-steps)).
   cell and stored as integers. The steps are **0.1 kg/m²** for water vapor and **2.5 DU** for
   ozone. The differences between the ancillary options at these scenes were mostly smaller than
   one step.
-- **The 1° longitude shift in the GRIB reader ([KNOWN_ISSUES #2](KNOWN_ISSUES.md#2-gdas-grid-is-shifted-1-in-longitude))
-  is confirmed with LaSRC's own output.** It matters more than the choice of ancillary source. At
-  T15VVD it moves the ozone LaSRC uses from 381 to 398 DU (+4.4%).
 - **Latency:** the GFS 6-h forecast pair is available 0–3.6 h after acquisition and the GFS 12-h
   lead pair before acquisition, compared with 7–13 h for the GDAS analyses. On these scenes there
   was no measurable cost in the inputs LaSRC used.
@@ -65,7 +62,7 @@ From `lasrc/c_version/src/lut_subr.c` (`open_gb_oz_wv_datasets`, `get_cart_lines
 `get_cart_interp`) and `compute_refl_subr.c` (`init_sr_refl`):
 
 1. **Read** PWAT (kg/m²) and TOZNE (DU) from both files on the 1° grid (181 × 360). The reader
-   rotates each row to start at "−180°" with an off-by-one (KNOWN_ISSUES #2).
+   rotates each row to start at "−180°".
 2. **Interpolate in time** at every grid point:
    `value = w1 × file1 + w2 × file2`, where `w2 = (t_acq − t1) / 6 h`.
 3. **Resample to the CMG grid** (0.05°, 3600 × 7200) with **bilinear** interpolation. The
@@ -81,9 +78,8 @@ From `lasrc/c_version/src/lut_subr.c` (`open_gb_oz_wv_datasets`, `get_cart_lines
 
 ![LaSRC's CMG grid vs the correctly located field](figures/ancillary_source_comparison/T19LGF_CMG_resampling_V0.png)
 
-*T19LGF, V0. Left: water vapor and ozone correctly located and bilinear-resampled to 0.05°. Right:
-LaSRC's CMG field as built, shifted 1° east and stored as integers. The 2.5 DU ozone steps are
-visible as bands.*
+*T19LGF, V0. Left: water vapor and ozone bilinear-resampled to 0.05°. Right: LaSRC's CMG field
+as built and stored as integers. The 2.5 DU ozone steps are visible as bands.*
 
 ### Independent reproduction
 
@@ -91,10 +87,6 @@ A standalone script (`reproduce_lasrc_uwv_uoz.py`, outside LaSRC) implements ste
 same GRIB files. It reproduces the `uwv, uoz` values LaSRC printed in **11 of 12 runs** across the
 three granules. The one miss is T43VDD S1 ozone, where the value is 146.99 vs a step boundary at 147
 (float precision).
-
-The values only match when the 1° grid is **shifted one cell east**. Without the shift, or with a
-west shift, none of the T19LGF water vapor values match. This confirms KNOWN_ISSUES #2 on real data:
-LaSRC uses the value from about 1° east of the scene.
 
 ## 4. Checks that each run used its own ancillary files
 
@@ -114,20 +106,20 @@ LaSRC uses the value from about 1° east of the scene.
 "At scene" is the correctly located, time-interpolated value at the scene centre. "LaSRC used" is
 the printed `uwv, uoz` (identical to the reproduction except where noted).
 
-| Granule | Run | PWAT at scene (kg/m²) | PWAT at LaSRC's cell (1° east) | Stored `wv` | LaSRC `uwv` | TOZNE at scene (DU) | TOZNE at LaSRC's cell | Stored `oz` | LaSRC `uoz` |
-|---|---|---|---|---|---|---|---|---|---|
-| T19LGF | V0 | 47.54 | 48.47 | 484 | **2.42** | 257.97 | 257.61 | 103 | 0.2575 |
-| | S1 | 47.77 | 48.64 | 486 | **2.43** | 258.22 | 257.91 | 103 | 0.2575 |
-| | S2 | 48.06 | 48.67 | 486 | **2.43** | 258.18 | 258.05 | 103 | 0.2575 |
-| | S3 | 47.23 | 48.62 | 486 | **2.43** | 258.01 | 257.59 | 103 | 0.2575 |
-| T15VVD | V0 | 1.377 | 1.480 | 14 | 0.07 | 381.06 | 397.92 | 159 | 0.3975 |
-| | S1 | 1.380 | 1.468 | 14 | 0.07 | 380.61 | 398.81 | 159 | 0.3975 |
-| | S2 | 1.374 | 1.457 | 14 | 0.07 | 379.42 | 398.14 | 159 | 0.3975 |
-| | S3 | 1.319 | 1.461 | 14 | 0.07 | 380.25 | 397.89 | 159 | 0.3975 |
-| T43VDD | V0 | 2.918 | 2.849 | 28 | 0.14 | 359.39 | 367.55 | 147 | 0.3675 |
-| | S1 | 2.919 | 2.847 | 28 | 0.14 | 359.41 | 367.48 | 146 (LaSRC: 147) | 0.3675 |
-| | S2 | 2.919 | 2.845 | 28 | 0.14 | 359.41 | 367.53 | 147 | 0.3675 |
-| | S3 | 2.935 | 2.895 | 28 | 0.14 | 360.01 | 368.25 | 147 | 0.3675 |
+| Granule | Run | PWAT at scene (kg/m²) | Stored `wv` | LaSRC `uwv` | TOZNE at scene (DU) | Stored `oz` | LaSRC `uoz` |
+|---|---|---|---|---|---|---|---|
+| T19LGF | V0 | 47.54 | 484 | **2.42** | 257.97 | 103 | 0.2575 |
+| | S1 | 47.77 | 486 | **2.43** | 258.22 | 103 | 0.2575 |
+| | S2 | 48.06 | 486 | **2.43** | 258.18 | 103 | 0.2575 |
+| | S3 | 47.23 | 486 | **2.43** | 258.01 | 103 | 0.2575 |
+| T15VVD | V0 | 1.377 | 14 | 0.07 | 381.06 | 159 | 0.3975 |
+| | S1 | 1.380 | 14 | 0.07 | 380.61 | 159 | 0.3975 |
+| | S2 | 1.374 | 14 | 0.07 | 379.42 | 159 | 0.3975 |
+| | S3 | 1.319 | 14 | 0.07 | 380.25 | 159 | 0.3975 |
+| T43VDD | V0 | 2.918 | 28 | 0.14 | 359.39 | 147 | 0.3675 |
+| | S1 | 2.919 | 28 | 0.14 | 359.41 | 146 (LaSRC: 147) | 0.3675 |
+| | S2 | 2.919 | 28 | 0.14 | 359.41 | 147 | 0.3675 |
+| | S3 | 2.935 | 28 | 0.14 | 360.01 | 147 | 0.3675 |
 
 Spread across V0–S3 at the scene centre:
 
@@ -140,7 +132,7 @@ Spread across V0–S3 at the scene centre:
 - **T15VVD and T43VDD** are January high-latitude scenes with very little water vapor (1.4 and
   2.9 kg/m²). The four options differ by less than one storage step, so LaSRC used the same `uwv`
   and `uoz` for all four.
-- **T19LGF** is wet and the options differ by up to 0.8 kg/m². At LaSRC's (shifted) cell, S1–S3
+- **T19LGF** is wet and the options differ by up to 0.8 kg/m². At the cell LaSRC reads, S1–S3
   happen to fall in the same 0.1 kg/m² step (48.6–48.7). V0's 18Z analysis is slightly drier (48.47)
   and lands two steps lower.
 
@@ -196,10 +188,7 @@ vs forecast.
 2. **LaSRC's precision limits what can be detected.** With one scene value and integer storage, input
    differences below 0.1 kg/m² or 2.5 DU cannot change the result. Differences of that size are
    physically negligible for the correction, but the test cannot tell 0.05 kg/m² from 0.
-3. **The 1° east shift (KNOWN_ISSUES #2) is the largest error found.** At LaSRC's cell vs the scene
-   centre: water vapor +0.9 kg/m² (+2%) at T19LGF, ozone +17 DU (+4.4%) at T15VVD and +8 DU (+2.3%)
-   at T43VDD. Fixing #2 changes LaSRC's inputs more than any choice of ancillary source.
-4. **The pipeline works as intended.** File selection, time weighting and the reading of forecast
+3. **The pipeline works as intended.** File selection, time weighting and the reading of forecast
    files (after relabelling) all behave as expected.
 
 ## 7. Limitations and next steps
@@ -207,8 +196,7 @@ vs forecast.
 - **Three January granules.** Two are dry, high-latitude winter scenes. Forecast-analysis differences
   are largest in moist, fast-changing weather (tropical convection, fronts, summer). Recommended: a
   sample of about 20–50 summer and tropical granules, plus scenes on strong moisture gradients.
-- **One-scene value.** Results depend on which CMG cell LaSRC samples. After a fix for KNOWN_ISSUES
-  #2, the comparison should be repeated.
+- **One-scene value.** Results depend on which CMG cell LaSRC samples.
 - **Relabelling forecast files** is a test workaround. Operational use of forecasts needs LaSRC to
   use valid time (reference + forecast hour) instead of the reference time.
 - **GFS resolution.** NOAA proposes removing GFS 1° (PNS 26-30). An operational GFS option would use

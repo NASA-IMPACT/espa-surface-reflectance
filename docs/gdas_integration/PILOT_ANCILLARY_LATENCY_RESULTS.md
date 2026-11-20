@@ -60,7 +60,37 @@ L30 B01–B04, B06, B07):
 ## 3. Scene-centre water vapor and ozone used by LaSRC
 
 LaSRC uses one water vapor (`uwv`, g/cm²) and ozone (`uoz`) value at the scene centre, stored on
-its grid in steps of 0.005 g/cm² and 2.5 DU. Across the pilot:
+its grid in steps of 0.005 g/cm² and 2.5 DU.
+
+### 3.1 How the values are obtained
+
+- **S1, S2, S3: read from the LaSRC log.** LaSRC prints `uwv, uoz, pres: …` for every run;
+  `run_record.py` copies these, the scene-centre latitude/longitude and the two time weights into
+  `records/<p>/<S>/<granule>.json`. These are the values LaSRC actually used.
+- **V0: reproduced from the GRIB files, no container run.** The V0 outputs come from the earlier
+  validated run, which did not write these records, so `scene_centre_values.py` recomputes the
+  values from V0's two GDAS analyses (GDAS C1 f000 and C2 f000 from the mirror, chosen by the same
+  `select_pair.py` as the runs). It repeats LaSRC b271310's steps:
+  1. read PWAT (kg/m²) and TOZNE (DU) from each file on the 1° grid (GRIB2 decoded with numpy;
+     the decoder matches eccodes to 1e-13);
+  2. time-interpolate with LaSRC's own weights, `w1·file1 + w2·file2`, where `w2` = (acquisition −
+     C1) / 6 h; V0 and S1 share C1, C2 and the acquisition time, so the weights and scene centre
+     are taken from the S1 record of the same granule;
+  3. bilinear-resample to the 0.05° CMG cell nearest the scene centre, reading the grid the same
+     way LaSRC does;
+  4. truncate to LaSRC's integer storage, `wv = int(PWAT·10)`, `oz = int(TOZNE·0.4)`, and convert,
+     `uwv = wv / 200`, `uoz = oz / 400`.
+- **Check of the method.** Run on S2 and S3, where LaSRC's logged values are known, it reproduces
+  33 of 40 runs exactly. In the other 7 one of the two values is off by exactly one storage step
+  (0.005 g/cm² or 2.5 DU); in each of those the interpolated value is within 0.15 of a storage
+  boundary, so the difference is floating-point detail in LaSRC's resampling, not a different
+  method. V0 values are therefore exact or within one storage step. They are written to
+  `records/<p>/V0/` with `source: reproduced…`, and the V0 map panels are labelled
+  "reproduced from GRIB".
+
+### 3.2 Values
+
+Across the pilot:
 
 | Product | Pair | Granules with different `uwv` | Max \|Δuwv\| (g/cm²) | Granules with different `uoz` | Max \|Δuoz\| (DU) |
 |---|---|---|---|---|---|
@@ -71,8 +101,7 @@ its grid in steps of 0.005 g/cm² and 2.5 DU. Across the pilot:
 
 For scale, the pilot granules span 0.08–2.62 g/cm² of water vapor and 255–405 DU of ozone. The
 scenarios do change the inputs (most granules get a different `uwv`), but by about one to two
-quantisation steps, which is consistent with the near-identical reflectance. V0 has no
-per-granule record yet because it reuses the earlier outputs (see section 6).
+quantisation steps, which is consistent with the near-identical reflectance.
 
 | S30 water vapor | S30 ozone |
 |---|---|
@@ -183,13 +212,12 @@ of granules within the threshold. Per-granule values are in
 ## 6. Caveats
 
 - **Small sample.** 9–10 granules per product; pass rates move by 10 % per granule.
-- **V0 is the earlier validated run, not a rerun.** S1–S3 went through the new runner, V0 did
-  not, so a V0-vs-scenario difference can include anything else that changed between the runs.
-  T16TCK is the only granule where this shows up.
+- **V0 reuses the existing outputs.** The GDAS-analysis (V0) outputs already exist from the
+  previous GDAS-vs-VIIRS validation, so V0 was not rerun; its scene-centre water vapor and ozone
+  are recomputed from the GRIB files (section 3.1).
 - **L30 final stage not compared** (no HLS COGs from the L30 container; see section 1).
 - **Scene-centre values only.** LaSRC applies one `uwv`/`uoz` per scene, so the maps and
   table in section 3 show exactly what LaSRC used; within-scene gradients play no part.
-- The 1° east shift in the GRIB reading (KNOWN_ISSUES #2) applies equally to every scenario.
 
 ## 7. Next steps
 
@@ -206,6 +234,8 @@ R=/rtmp/tvo/LaSRC_ancillary_latency_20261120
 TRIM=yes bash $R/scripts/submit.sh pilot both            # S1-S3 runs, pilot lists
 PRODUCTS="S30 L30" REFS="VIIRS" SUBMIT=1 bash $R/scripts/validate.sh   # scenario vs VIIRS
 bash $R/scripts/validate_v0_vs_viirs.sh                  # V0 vs VIIRS on the same granules
+python $R/scripts/scene_centre_values.py --root $R --check            # method vs LaSRC logs (S1-S3)
+python $R/scripts/scene_centre_values.py --root $R --scenario V0 --write  # V0 uwv/uoz records
 python $R/scripts/plot_pilot_difference_map.py --root $R # maps -> $R/reports_pilot/maps
 ```
 
