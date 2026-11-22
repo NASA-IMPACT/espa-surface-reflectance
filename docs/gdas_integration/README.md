@@ -13,6 +13,7 @@ in 2026.
 | Ancillary source comparison | [`ANCILLARY_SOURCE_COMPARISON.md`](ANCILLARY_SOURCE_COMPARISON.md): water vapor and ozone used by LaSRC with GDAS analysis, GDAS forecast and GFS (smoke test, 3 granules) |
 | Large-scale test plan | [`LARGE_SCALE_ANCILLARY_TEST_PLAN.md`](LARGE_SCALE_ANCILLARY_TEST_PLAN.md): plan to rerun the S30/L30 validation set with the low-latency ancillary scenarios |
 | Pilot results (low-latency ancillary) | [`PILOT_ANCILLARY_LATENCY_RESULTS.md`](PILOT_ANCILLARY_LATENCY_RESULTS.md): preliminary results for 10 S30 + 10 L30 granules, each scenario vs VIIRS, with per-band maps |
+| Full-set results, L30 | [`FULL_L30_ANCILLARY_LATENCY_RESULTS.md`](FULL_L30_ANCILLARY_LATENCY_RESULTS.md): all 614 L30 granules, each scenario vs VIIRS and vs V0 |
 
 ## 1. What changed in the C code
 

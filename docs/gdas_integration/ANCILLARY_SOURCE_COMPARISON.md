@@ -6,8 +6,9 @@ ancillary comes from the **GDAS analysis**, a **GDAS 6-h forecast**, or the **GF
 this branch (`b271310`, unmodified) and explains how LaSRC turns a GRIB file into the two numbers
 it applies to a scene.
 
-**Status:** smoke test, 3 granules (all January 2025). Results are solid for these scenes. They are
-not yet a statistical sample (see [Limitations](#7-limitations-and-next-steps)).
+**Status:** smoke test, 3 granules (all January 2025), extended in [section 5.3](#53-larger-sample-pilot-granules-s30-and-l30)
+to the pilot of the large-scale test (10 S30 + 22 L30 granules, January and July). The full set
+(605 S30 + 614 L30 granules) is running (see [Limitations](#7-limitations-and-next-steps)).
 
 ## 1. Summary
 
@@ -213,6 +214,66 @@ The large VIIRS differences at T15VVD and T43VDD are the same for V0–S3. They 
 NOAA ancillary (and, at T15VVD, the aerosol-repair artifact, KNOWN_ISSUES #19), not from analysis
 vs forecast.
 
+### 5.3 Larger sample: pilot granules (S30 and L30)
+
+The same comparison on the pilot of the large-scale test
+([PILOT_ANCILLARY_LATENCY_RESULTS.md](PILOT_ANCILLARY_LATENCY_RESULTS.md)), January and July 2025,
+spread worldwide: 10 S30 and 22 L30 granules for the water vapor and ozone values (30 and 66
+granule-scenario pairs), and the 9 S30 and 10 L30 granules with a VIIRS pair for surface reflectance.
+S1–S3 values are LaSRC's logged `uwv`, `uoz`; V0 values are reproduced from the GDAS analyses with the
+steps in 5.1 (`scene_centre_values.py`), because the existing V0 run did not record them.
+
+**How different are the inputs?** Before LaSRC's storage step, the scenarios differ from V0 by a median
+of 0.5% (S30) and 0.7% (L30) in water vapor, at most 3.7% and 7.8%, and by a median of 0.1–0.2% in
+ozone, at most 1.3% and 1.8%.
+
+**How much of that reaches LaSRC?** After truncation to LaSRC's steps (0.005 g/cm² water vapor, about
+0.5% of a typical value; 2.5 DU ozone, about 0.8%), the value LaSRC uses is identical to V0 in
+9 of 30 (S30) and 17 of 66 (L30) pairs for water vapor, and in 22 of 30 and 46 of 66 pairs for
+ozone. Where it still differs, the difference is one or a few whole steps.
+
+| S30 | L30 |
+|---|---|
+| ![](figures/ancillary_source_comparison/pilot/precision_loss_S30.png) | ![](figures/ancillary_source_comparison/pilot/precision_loss_L30.png) |
+
+*Each dot is one granule. Left-right: difference from V0 in the input data; up-down: difference
+in the value LaSRC uses. Dots on the zero line had real input differences that LaSRC's rounding
+removed.*
+
+Water vapor and ozone LaSRC used, V0 and the difference of each scenario from V0 (%):
+
+| | Water vapor | Ozone |
+|---|---|---|
+| S30 | ![](figures/ancillary_source_comparison/pilot/scene_centre_uwv_S30.png) | ![](figures/ancillary_source_comparison/pilot/scene_centre_uoz_S30.png) |
+| L30 | ![](figures/ancillary_source_comparison/pilot/scene_centre_uwv_L30.png) | ![](figures/ancillary_source_comparison/pilot/scene_centre_uoz_L30.png) |
+
+**How much does surface reflectance change?** Each scenario minus V0, as % of the granule's mean
+reflectance (largest over the bands in the validation summary): median 0.03% for S30 (final) and
+0.04% for L30 (immediate). Apart from one granule, the largest change is 0.17% (S30) and 0.37% (L30).
+The exception is T16TCK, a bright winter scene in Illinois, where S1–S3 are about 0.7–0.9% brighter than V0
+in B01–B04 and about 5% darker in SWIR (B11, where snow is dark). Its water vapor is unchanged and its ozone is one step
+lower; the cause is under investigation (see the pilot results, section 4).
+
+| S30, final, B04 | L30, immediate, B04 |
+|---|---|
+| ![](figures/ancillary_source_comparison/pilot/change_vs_v0_S30_final_B04.png) | ![](figures/ancillary_source_comparison/pilot/change_vs_v0_L30_immediate_B04.png) |
+
+*First panel: V0 compared with the VIIRS-based run, for scale. Other panels: each scenario compared
+with V0. Same colour scale, % of mean reflectance.*
+
+Reflectance change against the change in water vapor and ozone LaSRC used:
+
+| S30 (final) | L30 (immediate) |
+|---|---|
+| ![](figures/ancillary_source_comparison/pilot/sensitivity_scatter_S30.png) | ![](figures/ancillary_source_comparison/pilot/sensitivity_scatter_L30.png) |
+
+*Each dot is one granule and scenario. Changes of a few percent in water vapor or one ozone step
+move reflectance by hundredths of a percent; T16TCK is the only outlier. A few dots show small
+reflectance changes with no change in the inputs: V0's reproduced values can be one storage step off
+(section "Independent reproduction"), so those pairs may in fact differ by one step.*
+
+These plots will be regenerated for the full set (605 S30 + 614 L30 granules) when that run finishes.
+
 ## 6. Findings
 
 1. **Ancillary source (GDAS analysis, GDAS forecast, GFS 6-h or 12-h).** On these three scenes the
@@ -226,9 +287,9 @@ vs forecast.
 
 ## 7. Limitations and next steps
 
-- **Three January granules.** Two are dry, high-latitude winter scenes. Forecast-analysis differences
-  are largest in moist, fast-changing weather (tropical convection, fronts, summer). Recommended: a
-  sample of about 20–50 summer and tropical granules, plus scenes on strong moisture gradients.
+- **Sample size.** The smoke test had three January granules; section 5.3 adds the pilot (January and
+  July, worldwide). The full validation set (605 S30 + 614 L30 granules) is running and will replace
+  the pilot plots.
 - **One-scene value.** Results depend on which CMG cell LaSRC samples.
 - **Relabelling forecast files** is a test workaround. Operational use of forecasts needs LaSRC to
   use valid time (reference + forecast hour) instead of the reference time.
