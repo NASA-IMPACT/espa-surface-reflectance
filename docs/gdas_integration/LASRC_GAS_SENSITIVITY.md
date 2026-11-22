@@ -129,6 +129,47 @@ scenario and V0. S1–S3 values are those LaSRC logged; V0 values are reproduced
   different ozone or water vapor correction shifts the retrieved aerosol a little, and that moves every
   band. The size stays small, except on a few winter scenes (see T16TCK in the S30 pilot).
 
+### 4.1 Surface reflectance against the water vapor and ozone LaSRC used
+
+The same data shown directly: the reflectance of each run against the water vapor and ozone values
+LaSRC used for it.
+
+![](figures/gas_sensitivity/sr_vs_inputs_raw_L30.png)
+
+*One dot per granule and run (V0, S1, S2, S3). The four runs lie on top of each other. Across
+granules, reflectance is set by the surface (forest, desert, snow, water), not by the atmosphere,
+so plotted this way the effect of water vapor or ozone cannot be seen.*
+
+To see the effect, each scenario is compared with V0 for the same granule, so that the surface is the
+same and only the input changes. To separate the two gases, the top row keeps only pairs where the
+ozone LaSRC used is identical to V0 (so any change comes from water vapor), and the bottom row only
+pairs where the water vapor is identical (so any change comes from ozone).
+
+![](figures/gas_sensitivity/sr_vs_inputs_delta_L30.png)
+
+*Coloured dots: measured reflectance change vs V0 (HLS DN). Black: LaSRC's gas-absorption formula
+applied to the same granules (median per bin). Ozone changes come in whole 2.5 DU steps, hence the
+columns of dots.*
+
+| Band | Pairs | Measured slope | Gas |
+|---|---|---|---|
+| B03 Green | 1,386 | 5.3 DN per g/cm² | water vapor |
+| B04 Red | 1,386 | 9.8 DN per g/cm² | water vapor |
+| B07 SWIR2 | 1,386 | 35 DN per g/cm² | water vapor |
+| B02 Blue | 544 | 0.3 DN per DU | ozone |
+| B03 Green | 544 | 2.0 DN per DU | ozone |
+| B04 Red | 544 | 1.1 DN per DU | ozone |
+
+- **The reflectance responds in the expected direction and by the expected amount.** More water vapor
+  or ozone given to LaSRC means a larger absorption correction and a slightly brighter surface; the
+  measured dots follow the formula (black) in every panel.
+- **The responses are small.** The water vapor differences between sources are at most about
+  ±0.15 g/cm² (LaSRC units), which at 35 DN per g/cm² gives about ±5 DN in SWIR2 and well under
+  ±2 DN in green and red. One ozone step (2.5 DU) gives a median of about 1.5–3 DN in green and red,
+  up to about 10 DN on bright scenes; the larger values at ±5 DU are bright winter scenes, where the
+  same relative change is more DN.
+- Thresholds are 54–131 DN.
+
 ## 5. How wrong would the inputs have to be to fail validation?
 
 The threshold of each band expressed as a percentage of a typical reflectance (median over the
