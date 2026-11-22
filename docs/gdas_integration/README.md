@@ -14,6 +14,8 @@ in 2026.
 | Large-scale test plan | [`LARGE_SCALE_ANCILLARY_TEST_PLAN.md`](LARGE_SCALE_ANCILLARY_TEST_PLAN.md): plan to rerun the S30/L30 validation set with the low-latency ancillary scenarios |
 | Pilot results (low-latency ancillary) | [`PILOT_ANCILLARY_LATENCY_RESULTS.md`](PILOT_ANCILLARY_LATENCY_RESULTS.md): preliminary results for 10 S30 + 10 L30 granules, each scenario vs VIIRS, with per-band maps |
 | Full-set results, L30 | [`FULL_L30_ANCILLARY_LATENCY_RESULTS.md`](FULL_L30_ANCILLARY_LATENCY_RESULTS.md): all 614 L30 granules, each scenario vs VIIRS and vs V0 |
+| Sensitivity to water vapor and ozone | [`LASRC_GAS_SENSITIVITY.md`](LASRC_GAS_SENSITIVITY.md): how LaSRC uses the two values, per-band sensitivity, check against the full L30 run |
+| Checking the ancillary input files | [`ANCILLARY_INPUT_VERIFICATION.md`](ANCILLARY_INPUT_VERIFICATION.md): which files each run uses, how to check one or all runs, how to change the inputs |
 
 ## 1. What changed in the C code
 

@@ -173,6 +173,8 @@ the reflectance change is zero to within 0.02% (median 0.000%). So every reflect
 between a scenario and V0 comes from the water vapor and ozone LaSRC uses, and the reproduced V0
 values match the original run.
 
+**Why so small.** LaSRC uses water vapor and ozone only for the gas absorption in each band, and the HLS bands sit in atmospheric windows; see [LASRC_GAS_SENSITIVITY.md](LASRC_GAS_SENSITIVITY.md) for the formulas, per-band sensitivity and a check against these runs.
+
 **What this means.** The low-latency options change the water vapor and ozone LaSRC uses by about
 half a percent to two percent typically, and LaSRC's coarse storage removes most ozone differences.
 The resulting reflectance change is about 0.01–0.06% typically and at most 0.6%, far below the
