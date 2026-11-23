@@ -242,6 +242,35 @@ With records deliberately altered (a wrong md5, an S3 file swapped for f006, a w
 S1 record given S2's files), the audit reported each one under `checksum`, `sources`, `weights` and
 `distinct`, with the granule and the expected file.
 
+### 6.1 Plot which files each scenario used
+
+`plot_scenario_inputs.py` is a second, independent check. It reads only the run records (not the
+selection script's output) and works out, from each staged file's source path, which model, issue
+cycle and forecast hour the run actually used, and the time the file is valid for. It then compares
+these with the rule (table in section 2) and checks LaSRC's time weight.
+
+```bash
+python3 $R/scripts/plot_scenario_inputs.py collect --root $R --out $R/reports_full/scenario_inputs/inputs.csv
+python3 $R/scripts/plot_scenario_inputs.py plot --csv $R/reports_full/scenario_inputs/inputs.csv \
+  --out $R/reports_full/scenario_inputs --granule LC08_L1TP_001057      # login node (needs matplotlib)
+```
+
+![](figures/scenario_inputs/scenario_inputs_timeline.png)
+
+*One granule, all four runs: squares mark when each file was issued, circles the time it is valid for.
+LaSRC interpolates between the two valid times; the dashed line is the acquisition.*
+
+![](figures/scenario_inputs/scenario_inputs_check.png)
+
+*Every run, per file slot: share of runs that used the expected file (green) or any other file (red).*
+
+Result for the large-scale test: L30 2,456 of 2,456 runs and S30 1,825 of 1,825 runs used the expected
+files. The S30 count includes the two granules whose input zips are damaged: their runs failed, but
+they were given the right ancillary files. S30 V0 has 10 records (the pilot granules); V0 is the
+existing GDAS-analysis output and was not rerun.
+
+The three scripts are also in [`tools/`](tools/) so they can be read and run outside Meteor.
+
 ## 7. Change the input files
 
 **7.1 Change which files a scenario uses.** Edit the rule in `$R/scripts/select_pair.py`, function
