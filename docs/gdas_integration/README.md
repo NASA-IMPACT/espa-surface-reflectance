@@ -14,6 +14,7 @@ in 2026.
 | Large-scale test plan | [`LARGE_SCALE_ANCILLARY_TEST_PLAN.md`](LARGE_SCALE_ANCILLARY_TEST_PLAN.md): plan to rerun the S30/L30 validation set with the low-latency ancillary scenarios |
 | Pilot results (low-latency ancillary) | [`PILOT_ANCILLARY_LATENCY_RESULTS.md`](PILOT_ANCILLARY_LATENCY_RESULTS.md): preliminary results for 10 S30 + 10 L30 granules, each scenario vs VIIRS, with per-band maps |
 | Full-set results, L30 | [`FULL_L30_ANCILLARY_LATENCY_RESULTS.md`](FULL_L30_ANCILLARY_LATENCY_RESULTS.md): all 614 L30 granules, each scenario vs VIIRS and vs V0 |
+| Full-set results, S30 | [`FULL_S30_ANCILLARY_LATENCY_RESULTS.md`](FULL_S30_ANCILLARY_LATENCY_RESULTS.md): 603 S30 granules, each scenario vs VIIRS and vs V0, immediate and final stages |
 | Sensitivity to water vapor and ozone | [`LASRC_GAS_SENSITIVITY.md`](LASRC_GAS_SENSITIVITY.md): how LaSRC uses the two values, per-band sensitivity, check against the full L30 run |
 | Checking the ancillary input files | [`ANCILLARY_INPUT_VERIFICATION.md`](ANCILLARY_INPUT_VERIFICATION.md): which files each run uses, how to check one or all runs, how to change the inputs |
 | Processing time per step | [`HLS_PROCESSING_TIME.md`](HLS_PROCESSING_TIME.md): time of each HLS step (Fmask, LaSRC and its stages, post-LaSRC) for S30 and L30, with time-share pie charts |

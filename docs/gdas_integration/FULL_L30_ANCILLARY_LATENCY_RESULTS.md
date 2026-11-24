@@ -5,8 +5,8 @@ for **all 614 L30 validation granules** (January and July 2025). Pilot results a
 [PILOT_ANCILLARY_LATENCY_RESULTS.md](PILOT_ANCILLARY_LATENCY_RESULTS.md); how LaSRC uses the water
 vapor and ozone is in [ANCILLARY_SOURCE_COMPARISON.md](ANCILLARY_SOURCE_COMPARISON.md).
 
-**Status:** L30 complete, validated and with the sensitivity analysis (22 Nov 2026). S30 (605
-granules) is still running and will be added in a separate section.
+**Status:** L30 complete, validated and with the sensitivity analysis (22 Nov 2026). S30 results are in
+[FULL_S30_ANCILLARY_LATENCY_RESULTS.md](FULL_S30_ANCILLARY_LATENCY_RESULTS.md).
 
 ## 1. Summary
 
